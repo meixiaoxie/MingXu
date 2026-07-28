@@ -13,13 +13,17 @@ import { ToolRegistry } from "../tools/tool-registry.js";
 import { parseArgs } from "./parse-args.js";
 
 export interface CliDependencies {
-  run?: (config: ResolvedAgentConfig, prompt?: string) => Promise<string | void>;
+  run?: (
+    config: ResolvedAgentConfig,
+    prompt?: string,
+    modelKey?: string,
+  ) => Promise<string | void>;
   stdout?: Pick<NodeJS.WriteStream, "write">;
   stderr?: Pick<NodeJS.WriteStream, "write">;
   version?: string;
 }
 
-const HELP_TEXT = `Usage: mingxu [options] [prompt]\n\nOptions:\n  -c, --config <path>  JSON configuration file\n  -p, --prompt <text>  Prompt to send to the agent\n  -h, --help           Show this help\n  -v, --version        Show the version\n`;
+const HELP_TEXT = `Usage: mingxu [options] [prompt]\n\nOptions:\n  -c, --config <path>  JSON configuration file\n      --model <key>    Model key from config.models to run for this command\n  -p, --prompt <text>  Prompt to send to the agent\n  -h, --help           Show this help\n  -v, --version        Show the version\n`;
 
 export async function main(
   argv: readonly string[],
@@ -41,7 +45,7 @@ export async function main(
 
     const config = await loadConfig(args.configPath);
     const run = dependencies.run ?? createDefaultRunner(args.configPath);
-    const result = await run(config, args.prompt);
+    const result = await run(config, args.prompt, args.model);
     if (result !== undefined) stdout.write(`${result}\n`);
     return 0;
   } catch (error) {
@@ -52,7 +56,7 @@ export async function main(
 }
 
 function createDefaultRunner(configFilePath: string): NonNullable<CliDependencies["run"]> {
-  return async (config, prompt) => {
+  return async (config, prompt, modelKey) => {
     const agentPrompt = prompt?.trim();
     if (!agentPrompt) {
       throw new Error("A prompt is required");
@@ -79,7 +83,7 @@ function createDefaultRunner(configFilePath: string): NonNullable<CliDependencie
       });
     }
 
-    const { adapter, selection } = providerRegistry.createFromConfig(config);
+    const { adapter, selection } = providerRegistry.createFromConfig(config, modelKey);
     const runtimeModel = createRuntimeModelProvider(adapter, selection.model);
 
     // Built-in and plugin tools share one registry so duplicate names are caught
