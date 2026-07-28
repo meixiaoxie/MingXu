@@ -50,7 +50,7 @@ describe("mingxu CLI", () => {
     });
 
     try {
-      const run = vi.fn(async (config, prompt?: string) => {
+      const run = vi.fn(async (config, prompt?: string, modelKey?: string) => {
         expect(config).toMatchObject({
           name: "mingxu",
           defaultModel: "selected",
@@ -60,6 +60,7 @@ describe("mingxu CLI", () => {
           plugins: [],
         });
         expect(prompt).toBe("Say hello");
+        expect(modelKey).toBeUndefined();
         return "mocked result";
       });
       const stdout = { write: vi.fn() };
@@ -70,6 +71,35 @@ describe("mingxu CLI", () => {
       ).resolves.toBe(0);
       expect(run).toHaveBeenCalledOnce();
       expect(stdout.write).toHaveBeenCalledWith("mocked result\n");
+      expect(stderr.write).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("passes an explicit model key through to a custom runner", async () => {
+    const { root, configPath } = await writeConfigFile({
+      defaultModel: "primary",
+      models: {
+        primary: { provider: "anthropic", model: "claude-sonnet-5", apiKey: "test-key" },
+        backup: { provider: "anthropic", model: "claude-haiku-4-5", apiKey: "backup-key" },
+      },
+    });
+
+    try {
+      const run = vi.fn(async (_config, prompt?: string, modelKey?: string) => {
+        expect(prompt).toBe("Say hello");
+        expect(modelKey).toBe("backup");
+        return "backup result";
+      });
+      const stdout = { write: vi.fn() };
+      const stderr = { write: vi.fn() };
+
+      await expect(
+        main(["--config", configPath, "--model", "backup", "Say hello"], { run, stdout, stderr }),
+      ).resolves.toBe(0);
+      expect(run).toHaveBeenCalledOnce();
+      expect(stdout.write).toHaveBeenCalledWith("backup result\n");
       expect(stderr.write).not.toHaveBeenCalled();
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -102,6 +132,42 @@ describe("mingxu CLI", () => {
       const stdout = { write: vi.fn() };
       const stderr = { write: vi.fn() };
       await expect(main(["--config", configPath, "Say hello"], { stdout, stderr })).resolves.toBe(0);
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(stdout.write).toHaveBeenCalledWith("selected answer\n");
+      expect(stderr.write).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses an explicit model key when running the default provider pipeline", async () => {
+    const { root, configPath } = await writeConfigFile({
+      systemPrompt: "Be concise",
+      defaultModel: "ignored",
+      models: {
+        ignored: { provider: "anthropic", model: "claude-haiku-4-5", apiKey: "ignored-key" },
+        selected: { provider: "anthropic", model: "claude-sonnet-5", apiKey: "selected-key" },
+      },
+    });
+    const fetchMock = vi.fn(async (_url: string, init: { body?: string }) => {
+      expect(JSON.parse(init.body ?? "{}")).toMatchObject({
+        model: "claude-sonnet-5",
+        system: "Be concise",
+        messages: [{ role: "user", content: "Say hello" }],
+      });
+      return createResponse({
+        content: [{ type: "text", text: "selected answer" }],
+        stop_reason: "end_turn",
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    try {
+      const stdout = { write: vi.fn() };
+      const stderr = { write: vi.fn() };
+      await expect(
+        main(["--config", configPath, "--model", "selected", "Say hello"], { stdout, stderr }),
+      ).resolves.toBe(0);
       expect(fetchMock).toHaveBeenCalledOnce();
       expect(stdout.write).toHaveBeenCalledWith("selected answer\n");
       expect(stderr.write).not.toHaveBeenCalled();
@@ -250,6 +316,24 @@ describe("mingxu CLI", () => {
     }
   });
 
+  it("reports unknown CLI model keys at runtime", async () => {
+    const { root, configPath } = await writeConfigFile({
+      defaultModel: "primary",
+      models: { primary: { provider: "anthropic", model: "claude-sonnet-5", apiKey: "test-key" } },
+    });
+
+    try {
+      const stdout = { write: vi.fn() };
+      const stderr = { write: vi.fn() };
+      await expect(
+        main(["--config", configPath, "--model", "missing", "Say hello"], { stdout, stderr }),
+      ).resolves.toBe(1);
+      expect(stderr.write).toHaveBeenCalledWith(expect.stringContaining("Unknown model key: missing"));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps legacy single-model config operational", async () => {
     const { root, configPath } = await writeConfigFile({
       model: { provider: "anthropic", model: "claude-sonnet-5", apiKey: "test-key" },
@@ -265,6 +349,30 @@ describe("mingxu CLI", () => {
       const stderr = { write: vi.fn() };
       await expect(main(["--config", configPath, "Say hello"], { stdout, stderr })).resolves.toBe(0);
       expect(stdout.write).toHaveBeenCalledWith("legacy answer\n");
+      expect(stderr.write).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps legacy single-model config selectable through the normalized default key", async () => {
+    const { root, configPath } = await writeConfigFile({
+      model: { provider: "anthropic", model: "claude-sonnet-5", apiKey: "test-key" },
+    });
+    const fetchMock = vi.fn(async () => createResponse({
+      content: [{ type: "text", text: "legacy override answer" }],
+      stop_reason: "end_turn",
+    }));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    try {
+      const stdout = { write: vi.fn() };
+      const stderr = { write: vi.fn() };
+      await expect(
+        main(["--config", configPath, "--model", "default", "Say hello"], { stdout, stderr }),
+      ).resolves.toBe(0);
+      expect(stdout.write).toHaveBeenCalledWith("legacy override answer\n");
+      expect(stderr.write).not.toHaveBeenCalled();
     } finally {
       await rm(root, { recursive: true, force: true });
     }

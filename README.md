@@ -343,7 +343,11 @@ export default function register(registry) {
 假设你的配置文件叫 `mingxu.config.json`：
 
 ```bash
-pnpm build && node dist/cli/entry.js --config mingxu.config.json "Say hello"
+pnpm build
+```
+
+```bash
+node dist/cli/entry.js --config mingxu.config.json "Say hello"
 ```
 
 如果你已经全局或本地通过 bin 运行：
@@ -351,6 +355,24 @@ pnpm build && node dist/cli/entry.js --config mingxu.config.json "Say hello"
 ```bash
 mingxu --config mingxu.config.json "Say hello"
 ```
+
+### 临时切换到另一个已配置模型
+
+如果你的 `models` 里配置了多个模型条目，可以用 `--model <key>` 在这一次命令里临时切换。
+
+例如配置里有：
+- `primary`
+- `backup`
+
+那么可以这样运行：
+
+```bash
+node dist/cli/entry.js --config mingxu.config.json --model backup "Say hello"
+```
+
+这里的 `backup` 指的是 `models.backup` 这个**配置项名字**，不是底层真实模型 ID（例如 `claude-sonnet-5` 或 `gpt-4.1`）。
+
+如果不传 `--model`，CLI 仍然会使用 `defaultModel`。
 
 ---
 

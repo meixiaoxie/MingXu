@@ -1,5 +1,6 @@
 export interface CliArguments {
   readonly configPath: string;
+  readonly model: string | undefined;
   readonly prompt: string | undefined;
   readonly help: boolean;
   readonly version: boolean;
@@ -8,6 +9,7 @@ export interface CliArguments {
 /** Parses a deliberately small CLI surface without requiring a command-line package. */
 export function parseArgs(argv: readonly string[]): CliArguments {
   let configPath = "mingxu.config.json";
+  let model: string | undefined;
   let prompt: string | undefined;
   let help = false;
   let version = false;
@@ -21,6 +23,8 @@ export function parseArgs(argv: readonly string[]): CliArguments {
       version = true;
     } else if (argument === "--config" || argument === "-c") {
       configPath = readOptionValue(argv, ++index, argument);
+    } else if (argument === "--model") {
+      model = readOptionValue(argv, ++index, argument);
     } else if (argument === "--prompt" || argument === "-p") {
       prompt = readOptionValue(argv, ++index, argument);
     } else if (argument === "--") {
@@ -40,6 +44,7 @@ export function parseArgs(argv: readonly string[]): CliArguments {
   const positionalPrompt = positionals.length > 0 ? positionals.join(" ") : undefined;
   return {
     configPath,
+    model,
     prompt: prompt ?? positionalPrompt,
     help,
     version,
