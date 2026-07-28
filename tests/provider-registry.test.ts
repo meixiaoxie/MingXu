@@ -46,7 +46,7 @@ describe("ProviderRegistry", () => {
     expect(registry.register(definition)).toBe(registry);
     expect(registry.get("openai")).toBe(definition);
     expect(registry.create(config).provider).toBe("openai");
-    expect(definition.create).toHaveBeenCalledWith(config);
+    expect(definition.create).toHaveBeenCalledWith(config, undefined);
   });
 
   it("keeps the complete built-in provider catalog available", () => {

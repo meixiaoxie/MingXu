@@ -1,7 +1,7 @@
 export interface CliArguments {
   readonly configPath: string;
-  readonly prompt: string | undefined;
   readonly model: string | undefined;
+  readonly prompt: string | undefined;
   readonly help: boolean;
   readonly version: boolean;
   readonly command?: "resume" | "sessions" | "init" | "doctor";
@@ -14,8 +14,8 @@ export interface CliArguments {
 /** Parses a deliberately small CLI surface without requiring a command-line package. */
 export function parseArgs(argv: readonly string[]): CliArguments {
   let configPath = "mingxu.config.json";
-  let prompt: string | undefined;
   let model: string | undefined;
+  let prompt: string | undefined;
   let help = false;
   let version = false;
   let command: CliArguments["command"];
@@ -56,6 +56,8 @@ export function parseArgs(argv: readonly string[]): CliArguments {
       version = true;
     } else if (argument === "--config" || argument === "-c") {
       configPath = readOptionValue(argv, ++index, argument);
+    } else if (argument === "--model") {
+      model = readOptionValue(argv, ++index, argument);
     } else if (argument === "--prompt" || argument === "-p") {
       prompt = readOptionValue(argv, ++index, argument);
     } else if (argument === "--model" || argument === "-m") {
@@ -77,8 +79,8 @@ export function parseArgs(argv: readonly string[]): CliArguments {
   const positionalPrompt = positionals.length > 0 ? positionals.join(" ") : undefined;
   return {
     configPath,
-    prompt: prompt ?? positionalPrompt,
     model,
+    prompt: prompt ?? positionalPrompt,
     help,
     version,
     ...(command !== undefined ? { command } : {}),

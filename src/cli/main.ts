@@ -19,13 +19,18 @@ import { redactText, redactValue } from "../redaction/redactor.js";
 import { parseSecretRef } from "../redaction/secret-ref.js";
 import { FileSessionStore as VersionedFileSessionStore } from "../session/file-session-store.js";
 import { dirname, resolve } from "node:path";
-import { access, readFile, writeFile } from "node:fs/promises";
+import { access, writeFile } from "node:fs/promises";
 import { createInitConfig, renderInitConfig, type InitProfile } from "./init-config.js";
 import { runDoctor } from "./doctor.js";
 import { createProviderDebugLogger } from "./provider-debug.js";
 
 export interface CliDependencies {
-  run?: (config: ResolvedAgentConfig, prompt?: string, modelKey?: string, sessionId?: string) => Promise<string | void>;
+  run?: (
+    config: ResolvedAgentConfig,
+    prompt?: string,
+    modelKey?: string,
+    sessionId?: string,
+  ) => Promise<string | void>;
   listSessions?: (config: ResolvedAgentConfig) => Promise<string>;
   doctorProbe?: (config: ResolvedAgentConfig) => Promise<void>;
   stdout?: Pick<NodeJS.WriteStream, "write">;
@@ -60,7 +65,11 @@ export async function main(
     }
 
     const config = await loadConfig(args.configPath);
-    const run = dependencies.run ?? createDefaultRunner(args.configPath, stderr, args.debugProvider ?? dependencies.debugProvider ?? false);
+    const run = dependencies.run ?? createDefaultRunner(
+      args.configPath,
+      stderr,
+      args.debugProvider ?? dependencies.debugProvider ?? false,
+    );
     const listSessions = dependencies.listSessions ?? createSessionLister(args.configPath);
     if (args.command === "sessions") {
       const result = await listSessions(config);
@@ -78,7 +87,12 @@ export async function main(
       stdout.write(`${result.output}\n`);
       return result.ok ? 0 : 1;
     }
-    const result = await run(config, args.prompt, args.model, args.command === "resume" ? args.commandTarget : undefined);
+    const result = await run(
+      config,
+      args.prompt,
+      args.model,
+      args.command === "resume" ? args.commandTarget : undefined,
+    );
     if (result !== undefined) stdout.write(`${result}\n`);
     return 0;
   } catch (error) {

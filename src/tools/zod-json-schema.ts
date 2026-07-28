@@ -7,7 +7,11 @@ import type { ZodTypeAny } from "zod";
  * v0.1 only needs enough coverage for current tool definitions and provider-facing
  * tool metadata. We intentionally fail fast on shapes we do not yet serialize safely.
  */
-export function zodToJsonSchema(schema: ZodTypeAny): Record<string, unknown> {
+export function zodToJsonSchema(schema: ZodTypeAny | Record<string, unknown>): Record<string, unknown> {
+  if (isPlainSchemaObject(schema)) {
+    return schema;
+  }
+
   if (schema instanceof ZodOptional) {
     return zodToJsonSchema(schema.unwrap());
   }
@@ -57,5 +61,17 @@ export function zodToJsonSchema(schema: ZodTypeAny): Record<string, unknown> {
     };
   }
 
-  throw new Error(`Unsupported Zod schema for provider tool metadata: ${schema.constructor.name}`);
+  throw new Error("Unsupported Zod schema for provider tool metadata");
+}
+
+function isPlainSchemaObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object"
+    && value !== null
+    && !(value instanceof ZodOptional)
+    && !(value instanceof ZodString)
+    && !(value instanceof ZodNumber)
+    && !(value instanceof ZodBoolean)
+    && !(value instanceof ZodEnum)
+    && !(value instanceof ZodArray)
+    && !(value instanceof ZodObject);
 }

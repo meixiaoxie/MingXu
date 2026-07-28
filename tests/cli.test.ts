@@ -78,7 +78,7 @@ describe("mingxu CLI", () => {
     }
   });
 
-  it("passes --model to a custom runner and uses the selected named model", async () => {
+  it("passes an explicit model key through to a custom runner", async () => {
     const { root, configPath } = await writeConfigFile({
       defaultModel: "primary",
       models: {
@@ -91,7 +91,7 @@ describe("mingxu CLI", () => {
       const run = vi.fn(async (_config, prompt?: string, modelKey?: string) => {
         expect(prompt).toBe("Say hello");
         expect(modelKey).toBe("backup");
-        return "selected by cli";
+        return "backup result";
       });
       const stdout = { write: vi.fn() };
       const stderr = { write: vi.fn() };
@@ -100,20 +100,20 @@ describe("mingxu CLI", () => {
         main(["--config", configPath, "--model", "backup", "Say hello"], { run, stdout, stderr }),
       ).resolves.toBe(0);
       expect(run).toHaveBeenCalledOnce();
-      expect(stdout.write).toHaveBeenCalledWith("selected by cli\n");
+      expect(stdout.write).toHaveBeenCalledWith("backup result\n");
       expect(stderr.write).not.toHaveBeenCalled();
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
 
-  it("uses --model to override defaultModel in the default provider pipeline", async () => {
+  it("uses an explicit model key when running the default provider pipeline", async () => {
     const { root, configPath } = await writeConfigFile({
       systemPrompt: "Be concise",
-      defaultModel: "primary",
+      defaultModel: "ignored",
       models: {
-        primary: { provider: "anthropic", model: "claude-haiku-4-5", apiKey: "primary-key" },
-        backup: { provider: "anthropic", model: "claude-sonnet-5", apiKey: "backup-key" },
+        ignored: { provider: "anthropic", model: "claude-haiku-4-5", apiKey: "ignored-key" },
+        selected: { provider: "anthropic", model: "claude-sonnet-5", apiKey: "selected-key" },
       },
     });
     const fetchMock = vi.fn(async (_url: string, init: { body?: string }) => {
@@ -123,7 +123,7 @@ describe("mingxu CLI", () => {
         messages: [{ role: "user", content: "Say hello" }],
       });
       return createResponse({
-        content: [{ type: "text", text: "backup answer" }],
+        content: [{ type: "text", text: "selected answer" }],
         stop_reason: "end_turn",
       });
     });
@@ -133,10 +133,10 @@ describe("mingxu CLI", () => {
       const stdout = { write: vi.fn() };
       const stderr = { write: vi.fn() };
       await expect(
-        main(["--config", configPath, "--model", "backup", "Say hello"], { stdout, stderr }),
+        main(["--config", configPath, "--model", "selected", "Say hello"], { stdout, stderr }),
       ).resolves.toBe(0);
       expect(fetchMock).toHaveBeenCalledOnce();
-      expect(stdout.write).toHaveBeenCalledWith("backup answer\n");
+      expect(stdout.write).toHaveBeenCalledWith("selected answer\n");
       expect(stderr.write).not.toHaveBeenCalled();
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -360,7 +360,6 @@ describe("mingxu CLI", () => {
     }
   });
 
-
   it("prints provider diagnostics only when --debug-provider is enabled", async () => {
     const { root, configPath } = await writeConfigFile({
       defaultModel: "primary",
@@ -536,6 +535,24 @@ describe("mingxu CLI", () => {
       } finally {
         await rm(root, { recursive: true, force: true });
       }
+    }
+  });
+
+  it("reports unknown CLI model keys at runtime", async () => {
+    const { root, configPath } = await writeConfigFile({
+      defaultModel: "primary",
+      models: { primary: { provider: "anthropic", model: "claude-sonnet-5", apiKey: "test-key" } },
+    });
+
+    try {
+      const stdout = { write: vi.fn() };
+      const stderr = { write: vi.fn() };
+      await expect(
+        main(["--config", configPath, "--model", "missing", "Say hello"], { stdout, stderr }),
+      ).resolves.toBe(1);
+      expect(stderr.write).toHaveBeenCalledWith(expect.stringContaining("Unknown model key: missing"));
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
   });
 
