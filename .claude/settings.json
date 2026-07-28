@@ -1,0 +1,7 @@
+{
+  "worktree": {
+    "baseRef": "head"
+  },
+  "enableWorkflows": true,
+  "skipWorkflowUsageWarning": true
+}
