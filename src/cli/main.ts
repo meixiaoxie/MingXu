@@ -1,7 +1,8 @@
 import { Agent } from "../core/agent.js";
-import type { AgentConfig } from "../config/config-schema.js";
+import type { ResolvedAgentConfig } from "../config/config-schema.js";
 import { loadConfig } from "../config/load-config.js";
 import { FileSessionStore } from "../memory/file-session-store.js";
+import { loadCustomProviderModule } from "../models/custom-provider-loader.js";
 import { ProviderRegistry } from "../models/provider-registry.js";
 import { registerBuiltinProviders } from "../models/provider-catalog.js";
 import { createRuntimeModelProvider } from "../models/model-runtime.js";
@@ -12,7 +13,7 @@ import { ToolRegistry } from "../tools/tool-registry.js";
 import { parseArgs } from "./parse-args.js";
 
 export interface CliDependencies {
-  run?: (config: AgentConfig, prompt?: string) => Promise<string | void>;
+  run?: (config: ResolvedAgentConfig, prompt?: string) => Promise<string | void>;
   stdout?: Pick<NodeJS.WriteStream, "write">;
   stderr?: Pick<NodeJS.WriteStream, "write">;
   version?: string;
@@ -39,7 +40,7 @@ export async function main(
     }
 
     const config = await loadConfig(args.configPath);
-    const run = dependencies.run ?? createDefaultRunner();
+    const run = dependencies.run ?? createDefaultRunner(args.configPath);
     const result = await run(config, args.prompt);
     if (result !== undefined) stdout.write(`${result}\n`);
     return 0;
@@ -50,21 +51,39 @@ export async function main(
   }
 }
 
-function createDefaultRunner(): NonNullable<CliDependencies["run"]> {
+function createDefaultRunner(configFilePath: string): NonNullable<CliDependencies["run"]> {
   return async (config, prompt) => {
     const agentPrompt = prompt?.trim();
     if (!agentPrompt) {
       throw new Error("A prompt is required");
     }
 
-    const providerRegistry = registerBuiltinProviders(new ProviderRegistry());
-    const runtimeModel = createRuntimeModelProvider(
-      providerRegistry.create(config.model),
-      config.model,
+    // Startup order is intentional: aliases may only target shipped providers,
+    // while custom modules add real providers before the selected model is created.
+    const providerRegistry = registerBuiltinProviders(
+      new ProviderRegistry(),
+      config.providerAliases,
     );
+    if (config.customProviderModule !== undefined) {
+      await loadCustomProviderModule({
+        modulePath: config.customProviderModule,
+        configFilePath,
+        registry: providerRegistry,
+      });
+    }
+    for (const provider of Object.values(config.customProviders)) {
+      await loadCustomProviderModule({
+        modulePath: provider.module,
+        configFilePath,
+        registry: providerRegistry,
+      });
+    }
+
+    const { adapter, selection } = providerRegistry.createFromConfig(config);
+    const runtimeModel = createRuntimeModelProvider(adapter, selection.model);
 
     // Built-in and plugin tools share one registry so duplicate names are caught
-    // during startup and the Agent receives one complete model-facing tool list.
+    // during startup and the Agent receives one complete tool list.
     const toolRegistry = new ToolRegistry([echoTool, readFileTool]);
     const pluginLoader = new PluginLoader({
       registerTool: (tool) => {

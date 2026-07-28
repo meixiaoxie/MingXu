@@ -1,0 +1,37 @@
+{
+  "name": "mingxu",
+  "systemPrompt": "You are a helpful agent.",
+  "defaultModel": "assistant",
+  "models": {
+    "assistant": {
+      "provider": "work-openai",
+      "model": "gpt-4.1"
+    },
+    "fallback": {
+      "provider": "anthropic",
+      "model": "claude-sonnet-5",
+      "apiKey": "anthropic-key"
+    },
+    "gateway-model": {
+      "provider": "gateway",
+      "model": "internal-chat"
+    }
+  },
+  "providers": {
+    "work-openai": "openai",
+    "openai": {
+      "apiKey": "openai-key",
+      "baseUrl": "https://api.openai.com/v1/chat/completions"
+    }
+  },
+  "customProviders": {
+    "module": "./providers/register-gateway.mjs",
+    "gateway": {
+      "module": "./providers/register-gateway.mjs",
+      "baseUrl": "https://gateway.example.com/v1/chat/completions",
+      "apiKey": "gateway-key"
+    }
+  },
+  "maxIterations": 10,
+  "plugins": []
+}

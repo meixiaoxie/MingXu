@@ -1,10 +1,10 @@
 import {
-  agentConfigSchema,
-  type AgentConfig,
   type AgentConfigInput,
+  type ResolvedAgentConfig,
+  resolveAgentConfig,
 } from "./config-schema.js";
 
-/** Validates inline configuration immediately, close to where it is authored. */
-export function defineAgentConfig(config: AgentConfigInput): AgentConfig {
-  return agentConfigSchema.parse(config);
+/** Validates inline configuration and returns the canonical runtime shape. */
+export function defineAgentConfig(config: AgentConfigInput): ResolvedAgentConfig {
+  return resolveAgentConfig(config);
 }

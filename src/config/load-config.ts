@@ -1,10 +1,10 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-import { agentConfigSchema, type AgentConfig } from "./config-schema.js";
+import { agentConfigSchema, type ResolvedAgentConfig } from "./config-schema.js";
 
-/** Loads a JSON file from disk and validates it before it reaches the runtime. */
-export async function loadConfig(filePath: string): Promise<AgentConfig> {
+/** Loads JSON from disk and returns the same canonical shape as inline config. */
+export async function loadConfig(filePath: string): Promise<ResolvedAgentConfig> {
   const trimmedPath = filePath.trim();
   if (!trimmedPath) {
     throw new Error("Config file path cannot be empty");
@@ -26,12 +26,12 @@ export async function loadConfig(filePath: string): Promise<AgentConfig> {
     throw new Error(`Config file is not valid JSON: ${resolvedPath}`, { cause: error });
   }
 
-  const result = agentConfigSchema.safeParse(rawConfig);
-  if (!result.success) {
+  try {
+    return agentConfigSchema.parse(rawConfig);
+  } catch (error) {
     throw new Error(
-      `Invalid config file: ${resolvedPath}\n${result.error.message}`,
-      { cause: result.error },
+      `Invalid config file: ${resolvedPath}\n${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
     );
   }
-  return result.data;
 }

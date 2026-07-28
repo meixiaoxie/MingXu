@@ -1,4 +1,18 @@
-export { agentConfigSchema } from "./config-schema.js";
-export type { AgentConfig, AgentConfigInput, ModelConfig } from "./config-schema.js";
+export {
+  agentConfigSchema,
+  customProviderConfigSchema,
+  modelConfigSchema,
+  providerConfigSchema,
+  resolveAgentConfig,
+} from "./config-schema.js";
+export type {
+  AgentConfig,
+  AgentConfigInput,
+  CustomProviderConfig,
+  ModelConfig,
+  ProviderConfig,
+  ResolvedAgentConfig,
+  ResolvedProviderConfig,
+} from "./config-schema.js";
 export { defineAgentConfig } from "./define-agent-config.js";
 export { loadConfig } from "./load-config.js";

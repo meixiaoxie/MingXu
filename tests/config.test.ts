@@ -8,60 +8,166 @@ import {
   agentConfigSchema,
   defineAgentConfig,
   loadConfig,
+  resolveAgentConfig,
 } from "../src/index.js";
 
-const model = {
+const legacyModel = {
   provider: "anthropic",
   model: "claude-sonnet-5",
 };
 
 describe("agent config", () => {
-  it("accepts the minimal config shape and applies defaults", () => {
-    const config = defineAgentConfig({ model });
+  it("resolves the minimal named-model config and applies defaults", () => {
+    const config = defineAgentConfig({
+      defaultModel: "primary",
+      models: { primary: legacyModel },
+    });
 
     expect(config).toMatchObject({
       name: "mingxu",
-      model,
+      defaultModel: "primary",
+      model: legacyModel,
+      models: { primary: legacyModel },
+      providers: {},
+      providerAliases: {},
+      customProviders: {},
+      resolvedProviders: {},
       maxIterations: 10,
       plugins: [],
     });
     expect(agentConfigSchema.safeParse(config).success).toBe(true);
   });
 
-  it("rejects missing, unknown, and malformed config values", () => {
-    expect(agentConfigSchema.safeParse({}).success).toBe(false);
-    expect(agentConfigSchema.safeParse({ model: { provider: "anthropic" } }).success).toBe(false);
-    expect(agentConfigSchema.safeParse({ model, unknown: true }).success).toBe(false);
-    expect(agentConfigSchema.safeParse({ model: { ...model, unknown: true } }).success).toBe(false);
-    expect(agentConfigSchema.safeParse({ model, maxIterations: 0 }).success).toBe(false);
-  });
-
-  it("trims identifier-like values without changing the system prompt", () => {
-    const config = defineAgentConfig({
-      name: "  assistant  ",
-      systemPrompt: "  preserve these spaces  ",
-      model: { provider: " anthropic ", model: " claude-sonnet-5 " },
-      plugins: [" ./plugin.js "],
+  it("accepts provider aliases and a shared custom provider module", () => {
+    const config = resolveAgentConfig({
+      defaultModel: "primary",
+      models: { primary: { provider: " work ", model: "test" } },
+      providers: { " work ": " openai " },
+      customProviders: { module: " ./providers.mjs " },
     });
 
-    expect(config.name).toBe("assistant");
-    expect(config.systemPrompt).toBe("  preserve these spaces  ");
-    expect(config.model.provider).toBe("anthropic");
-    expect(config.plugins).toEqual(["./plugin.js"]);
+    expect(config.providerAliases).toEqual({ work: "openai" });
+    expect(config.customProviderModule).toBe("./providers.mjs");
+    expect(config.models.primary.provider).toBe("work");
+  });
+
+  it("merges provider defaults and named custom provider metadata", () => {
+    const config = resolveAgentConfig({
+      defaultModel: "primary",
+      models: {
+        primary: {
+          provider: "gateway",
+          model: "company-assistant",
+          apiKey: "model-key",
+          headers: { "x-tenant": "engineering" },
+        },
+      },
+      customProviders: {
+        gateway: {
+          module: "./gateway-provider.js",
+          apiKey: "provider-key",
+          baseUrl: "https://models.example.test/v1",
+          region: "eu-west",
+        },
+      },
+    });
+
+    expect(config.models.primary).toMatchObject({
+      provider: "gateway",
+      apiKey: "model-key",
+      baseUrl: "https://models.example.test/v1",
+      region: "eu-west",
+    });
+    expect(config.resolvedProviders.gateway).toMatchObject({
+      name: "gateway",
+      custom: true,
+      module: "./gateway-provider.js",
+    });
+  });
+
+  it("keeps legacy model input compatible and preserves adapter options", () => {
+    const config = defineAgentConfig({
+      model: {
+        ...legacyModel,
+        protocol: "openai-compatible",
+        headers: { authorization: "test" },
+      },
+    });
+
+    expect(config.defaultModel).toBe("default");
+    expect(config.models.default).toEqual(config.model);
+    expect(config.model).toMatchObject({
+      protocol: "openai-compatible",
+      headers: { authorization: "test" },
+    });
+  });
+
+  it("rejects empty, duplicate, or unsupported alias and module values", () => {
+    const base = { defaultModel: "primary", models: { primary: legacyModel } };
+    expect(agentConfigSchema.safeParse({ ...base, providers: { " ": "anthropic" } }).success)
+      .toBe(false);
+    expect(agentConfigSchema.safeParse({ ...base, providers: { work: " " } }).success)
+      .toBe(false);
+    expect(agentConfigSchema.safeParse({
+      ...base,
+      providers: { work: "anthropic", " work ": "anthropic" },
+    }).success).toBe(false);
+    expect(agentConfigSchema.safeParse({ ...base, providers: { work: "missing" } }).success)
+      .toBe(false);
+    expect(agentConfigSchema.safeParse({ ...base, customProviders: { module: " " } }).success)
+      .toBe(false);
+  });
+
+  it("rejects invalid model references and duplicate custom provider keys", () => {
+    expect(agentConfigSchema.safeParse({}).success).toBe(false);
+    expect(agentConfigSchema.safeParse({
+      defaultModel: "missing",
+      models: { primary: legacyModel },
+    }).success).toBe(false);
+    expect(agentConfigSchema.safeParse({
+      defaultModel: "primary",
+      models: { primary: { provider: "missing", model: "test" } },
+    }).success).toBe(false);
+    expect(agentConfigSchema.safeParse({
+      defaultModel: "primary",
+      models: { primary: legacyModel },
+      customProviders: { gateway: "./one.js", " gateway ": "./two.js" },
+    }).success).toBe(false);
   });
 });
 
 describe("loadConfig", () => {
-  it("loads JSON and applies schema defaults", async () => {
+  it("loads aliases and custom module configuration from JSON", async () => {
     const root = await mkdtemp(join(tmpdir(), "mingxu-config-"));
     const filePath = join(root, "valid.json");
-    await writeFile(filePath, JSON.stringify({ model }), "utf8");
+    await writeFile(filePath, JSON.stringify({
+      defaultModel: "primary",
+      models: { primary: { provider: "work", model: "test" } },
+      providers: { work: "anthropic" },
+      customProviders: { module: "./providers.mjs" },
+    }), "utf8");
 
     await expect(loadConfig(filePath)).resolves.toMatchObject({
-      name: "mingxu",
-      model,
-      maxIterations: 10,
-      plugins: [],
+      providerAliases: { work: "anthropic" },
+      customProviderModule: "./providers.mjs",
+    });
+  });
+
+  it("parses the documented multi-provider example", async () => {
+    const config = await loadConfig("examples/multi-provider.config.json");
+
+    expect(config.defaultModel).toBe("assistant");
+    expect(config.providerAliases).toEqual({ "work-openai": "openai" });
+    expect(config.customProviders.gateway).toMatchObject({
+      module: "./providers/register-gateway.mjs",
+      baseUrl: "https://gateway.example.com/v1/chat/completions",
+      apiKey: "gateway-key",
+    });
+    expect(config.models["gateway-model"]).toMatchObject({
+      provider: "gateway",
+      model: "internal-chat",
+      baseUrl: "https://gateway.example.com/v1/chat/completions",
+      apiKey: "gateway-key",
     });
   });
 
