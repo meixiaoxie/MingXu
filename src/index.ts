@@ -11,6 +11,8 @@ export type {
 } from "./core/types.js";
 export {
   AnthropicProvider,
+  CustomProvider,
+  GeminiProvider,
   type ModelAdapter,
   type ModelCapabilities,
   type ModelEvent,
@@ -21,16 +23,32 @@ export {
   type ModelResponse,
   type ModelToolCall,
   type ModelUsage,
+  OpenAICompatibleProvider,
   ProviderRegistry,
+  buildGeminiRequest,
   createRuntimeModelProvider,
   defaultModelCapabilities,
+  loadCustomProviderModule,
+  parseGeminiResponse,
+  parseOpenAICompatibleResponse,
   readProviderEnv,
   registerBuiltinProviders,
+  resolveCustomProviderModulePath,
   retryProviderRequest,
+  selectModelProvider,
   toModelOutput,
   toModelRequest,
+  toOpenAICompatibleRequest,
 } from "./models/index.js";
-export type { ProviderDefinition } from "./models/index.js";
+export type {
+  CustomProviderOptions,
+  CustomProviderRegister,
+  GeminiProviderOptions,
+  LoadCustomProviderModuleOptions,
+  OpenAICompatibleProviderOptions,
+  ProviderDefinition,
+  ProviderSelection,
+} from "./models/index.js";
 export {
   createReadFileTool,
   defineTool,
@@ -51,11 +69,19 @@ export { definePlugin, PluginLoader } from "./plugins/index.js";
 export type { Plugin, PluginContext } from "./plugins/index.js";
 export {
   agentConfigSchema,
+  customProviderConfigSchema,
   defineAgentConfig,
   loadConfig,
+  modelConfigSchema,
+  providerConfigSchema,
+  resolveAgentConfig,
 } from "./config/index.js";
 export type {
   AgentConfig,
   AgentConfigInput,
+  CustomProviderConfig,
   ModelConfig,
+  ProviderConfig,
+  ResolvedAgentConfig,
+  ResolvedProviderConfig,
 } from "./config/index.js";
