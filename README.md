@@ -1,10 +1,12 @@
 # mingxu
 
-`mingxu` 是一个最小化的 TypeScript Agent Runtime 骨架。你可以把它理解成“Agent 的发动机底盘”：它先把模型调用、工具执行、配置加载、插件扩展和会话保存这些基础零件拼起来，让你能从源码跑通一个最小可用的 Agent。
+`mingxu` 是一个最小化的 TypeScript Agent Runtime 骨架。你可以把它理解成”Agent 的发动机底盘”：它先把模型调用、工具执行、配置加载、插件扩展和会话保存这些基础零件拼起来，让你能从源码跑通一个最小可用的 Agent。
+
+底层 runtime 的完整设计蓝图和执行计划见：[docs/agent-runtime-design.md](docs/agent-runtime-design.md)。这份文档按 A/B/C 阶段说明每一部分用什么代码、要做什么设计、怎么分阶段实现和验证。
 
 > 当前版本是 `0.1.0` 开发阶段，npm 包仍为 `private`，请从源码运行。README 只描述现在已经真实具备的能力；规划中的能力见 `docs/plans/development-roadmap.md`。
 
-## 当前能力
+下面的内容重点讲**新配置结构怎么用**。
 
 现在已经可以真实使用的能力有：
 
