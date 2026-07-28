@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -6,14 +6,25 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { main } from "../src/cli/main.js";
 
-const originalFetch = globalThis.fetch;
-
 afterEach(() => {
   vi.restoreAllMocks();
-  if (originalFetch) {
-    globalThis.fetch = originalFetch;
-  }
+  vi.unstubAllGlobals();
 });
+
+function createResponse(body: unknown, status = 200) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => body,
+  };
+}
+
+async function writeConfigFile(config: unknown) {
+  const root = await mkdtemp(join(tmpdir(), "mingxu-cli-"));
+  const configPath = join(root, "mingxu.config.json");
+  await writeFile(configPath, JSON.stringify(config), "utf8");
+  return { root, configPath };
+}
 
 describe("mingxu CLI", () => {
   it("prints help and version information", async () => {
@@ -30,59 +41,84 @@ describe("mingxu CLI", () => {
     expect(stdout.write).toHaveBeenCalledWith("0.1.0\n");
   });
 
-  it("runs the agent loop end to end with Anthropic-style responses", async () => {
-    const root = await mkdtemp(join(tmpdir(), "mingxu-cli-"));
-    const configPath = join(root, "mingxu.config.json");
-    await writeFile(
-      configPath,
-      JSON.stringify({
-        model: {
-          provider: "anthropic",
-          model: "claude-sonnet-5",
-          apiKey: "test-key",
-        },
-      }),
-      "utf8",
-    );
-
-    const responses = [
-      {
-        content: [
-          { type: "text", text: "I will call a tool." },
-          { type: "tool_use", id: "call-1", name: "echo", input: { message: "hello" } },
-        ],
-        stop_reason: "tool_use",
+  it("loads config and forwards it to a custom runner", async () => {
+    const { root, configPath } = await writeConfigFile({
+      systemPrompt: "Be concise",
+      model: {
+        provider: "anthropic",
+        model: "claude-sonnet-5",
+        apiKey: "test-key",
       },
-      {
-        content: [{ type: "text", text: "final answer" }],
-        stop_reason: "end",
-      },
-    ];
-    const fetchMock = vi.fn(async (_url: string, init: { body: string }) => {
-      const request = JSON.parse(init.body) as { messages: unknown[]; tools?: Array<{ name: string }> };
-      if (fetchMock.mock.calls.length === 1) {
-        expect(request.messages).toEqual([{ role: "user", content: "Say hello" }]);
-        expect(request.tools?.map((tool) => tool.name)).toEqual(expect.arrayContaining(["echo", "readFile"]));
-      }
-      return {
-        ok: true,
-        status: 200,
-        async json() {
-          return responses.shift();
-        },
-      };
     });
-    globalThis.fetch = fetchMock as typeof fetch;
 
-    const stdout = { write: vi.fn() };
-    const stderr = { write: vi.fn() };
+    try {
+      const run = vi.fn(async (config, prompt?: string) => {
+        expect(config).toMatchObject({
+          name: "mingxu",
+          systemPrompt: "Be concise",
+          maxIterations: 10,
+          plugins: [],
+          model: {
+            provider: "anthropic",
+            model: "claude-sonnet-5",
+            apiKey: "test-key",
+          },
+        });
+        expect(prompt).toBe("Say hello");
+        return "mocked result";
+      });
+      const stdout = { write: vi.fn() };
+      const stderr = { write: vi.fn() };
 
-    await expect(
-      main(["--config", configPath, "Say hello"], { stdout, stderr }),
-    ).resolves.toBe(0);
+      await expect(
+        main(["--config", configPath, "Say hello"], { run, stdout, stderr }),
+      ).resolves.toBe(0);
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(stdout.write).toHaveBeenCalledWith("final answer\n");
-    expect(stderr.write).not.toHaveBeenCalled();
+      expect(run).toHaveBeenCalledOnce();
+      expect(stdout.write).toHaveBeenCalledWith("mocked result\n");
+      expect(stderr.write).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("runs the default Anthropic-backed runner end to end", async () => {
+    const { root, configPath } = await writeConfigFile({
+      systemPrompt: "Be concise",
+      model: {
+        provider: "anthropic",
+        model: "claude-sonnet-5",
+        apiKey: "test-key",
+      },
+    });
+
+    const fetchMock = vi.fn(async (_url: string, init: { body?: string }) => {
+      expect(JSON.parse(init.body ?? "{}")).toMatchObject({
+        model: "claude-sonnet-5",
+        max_tokens: 1024,
+        system: "Be concise",
+        messages: [{ role: "user", content: "Say hello" }],
+      });
+      return createResponse({
+        content: [{ type: "text", text: "final answer" }],
+        stop_reason: "end_turn",
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    try {
+      const stdout = { write: vi.fn() };
+      const stderr = { write: vi.fn() };
+
+      await expect(
+        main(["--config", configPath, "Say hello"], { stdout, stderr }),
+      ).resolves.toBe(0);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(stdout.write).toHaveBeenCalledWith("final answer\n");
+      expect(stderr.write).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

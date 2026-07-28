@@ -5,14 +5,15 @@ import { readProviderEnv } from "./provider-env.js";
 import type { ModelAdapter } from "./provider-registry.js";
 import type { ModelRequest, ModelResponse, ModelToolCall } from "./model-protocol.js";
 
+const ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages";
 const anthropicInputSchema = z.object({
   apiKey: z.string().optional(),
-  baseUrl: z.string().url().optional(),
+  baseUrl: z.string().trim().url().optional(),
 });
 
 interface AnthropicProviderOptions {
-  apiKey?: string;
-  baseUrl?: string;
+  apiKey?: string | undefined;
+  baseUrl?: string | undefined;
 }
 
 interface AnthropicBlock {
@@ -28,13 +29,13 @@ interface AnthropicBlock {
 export class AnthropicProvider implements ModelAdapter {
   readonly provider = "anthropic";
   readonly capabilities = defaultModelCapabilities;
-  readonly #apiKey?: string;
+  readonly #apiKey: string | undefined;
   readonly #baseUrl: string;
 
   constructor(options: AnthropicProviderOptions = {}) {
     const parsed = anthropicInputSchema.parse(options);
     this.#apiKey = parsed.apiKey?.trim() || readProviderEnv("ANTHROPIC_API_KEY");
-    this.#baseUrl = parsed.baseUrl ?? "https://api.anthropic.com/v1/messages";
+    this.#baseUrl = validateAnthropicBaseUrl(parsed.baseUrl ?? ANTHROPIC_MESSAGES_URL);
   }
 
   async generate(request: ModelRequest): Promise<ModelResponse> {
@@ -44,6 +45,9 @@ export class AnthropicProvider implements ModelAdapter {
 
     const response = await fetch(this.#baseUrl, {
       method: "POST",
+      // Do not follow redirects: a redirected request could forward the API key
+      // outside the trusted Anthropic endpoint validated in the constructor.
+      redirect: "error",
       headers: {
         "content-type": "application/json",
         "x-api-key": this.#apiKey,
@@ -72,6 +76,28 @@ export class AnthropicProvider implements ModelAdapter {
 
     return parseAnthropicResponse(await response.json());
   }
+}
+
+/** Ensures the API key can only be sent to Anthropic's official Messages endpoint. */
+function validateAnthropicBaseUrl(value: string): string {
+  const url = new URL(value);
+  const isOfficialEndpoint = url.protocol === "https:"
+    && url.hostname === "api.anthropic.com"
+    && (url.port === "" || url.port === "443")
+    && url.username === ""
+    && url.password === ""
+    && url.pathname === "/v1/messages"
+    && url.search === ""
+    && url.hash === "";
+
+  if (!isOfficialEndpoint) {
+    throw new Error(
+      "Anthropic baseUrl must be the official HTTPS Messages endpoint: "
+      + ANTHROPIC_MESSAGES_URL,
+    );
+  }
+
+  return ANTHROPIC_MESSAGES_URL;
 }
 
 function toAnthropicMessage(message: ModelRequest["messages"][number]): Record<string, unknown> {

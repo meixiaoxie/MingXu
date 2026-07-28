@@ -1,9 +1,14 @@
 import { Agent } from "../core/agent.js";
 import type { AgentConfig } from "../config/config-schema.js";
 import { loadConfig } from "../config/load-config.js";
+import { FileSessionStore } from "../memory/file-session-store.js";
 import { ProviderRegistry } from "../models/provider-registry.js";
 import { registerBuiltinProviders } from "../models/provider-catalog.js";
 import { createRuntimeModelProvider } from "../models/model-runtime.js";
+import { PluginLoader } from "../plugins/plugin-loader.js";
+import { echoTool } from "../tools/builtin/echo-tool.js";
+import { readFileTool } from "../tools/builtin/read-file-tool.js";
+import { ToolRegistry } from "../tools/tool-registry.js";
 import { parseArgs } from "./parse-args.js";
 
 export interface CliDependencies {
@@ -52,12 +57,32 @@ function createDefaultRunner(): NonNullable<CliDependencies["run"]> {
       throw new Error("A prompt is required");
     }
 
-    const registry = registerBuiltinProviders(new ProviderRegistry());
-    const runtimeModel = createRuntimeModelProvider(registry.create(config.model), config.model);
+    const providerRegistry = registerBuiltinProviders(new ProviderRegistry());
+    const runtimeModel = createRuntimeModelProvider(
+      providerRegistry.create(config.model),
+      config.model,
+    );
+
+    // Built-in and plugin tools share one registry so duplicate names are caught
+    // during startup and the Agent receives one complete model-facing tool list.
+    const toolRegistry = new ToolRegistry([echoTool, readFileTool]);
+    const pluginLoader = new PluginLoader({
+      registerTool: (tool) => {
+        toolRegistry.register(tool);
+      },
+    });
+    for (const pluginPath of config.plugins) {
+      await pluginLoader.load(pluginPath);
+    }
+
     const agent = new Agent({
       model: runtimeModel,
+      tools: [...toolRegistry.list()],
       ...(config.systemPrompt !== undefined ? { systemPrompt: config.systemPrompt } : {}),
       maxIterations: config.maxIterations,
+      ...(config.sessionFile !== undefined
+        ? { sessionStore: new FileSessionStore(config.sessionFile) }
+        : {}),
     });
     const result = await agent.run(agentPrompt);
     return result.content;

@@ -1,5 +1,7 @@
 // These shared types are the small contract between the agent, models, and tools.
 // Keeping them vendor-neutral lets the runtime swap Anthropic for another model later.
+import type { MemoryStore } from "../memory/memory-store.js";
+
 export type MessageRole = "user" | "assistant" | "tool";
 
 export interface ToolCall {
@@ -58,6 +60,8 @@ export interface AgentLoopOptions {
   tools?: Tool[];
   systemPrompt?: string;
   maxIterations?: number;
+  /** Optional persistent history used to continue the same conversation. */
+  sessionStore?: MemoryStore<Message[]>;
 }
 
 export interface AgentLoopResult {

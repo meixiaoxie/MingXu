@@ -1,7 +1,7 @@
-import { runAgentLoop } from "./agent-loop.js";
-import type { AgentLoopOptions, AgentLoopResult, ModelInput, ModelOutput, ModelProvider } from "./types.js";
+import { DEFAULT_MAX_ITERATIONS } from "./runtime-defaults.js";
+import type { AgentLoopOptions, AgentLoopResult, Message, ModelInput } from "./types.js";
 
-const DEFAULT_MAX_ITERATIONS = 8;
+const SESSION_MESSAGES_KEY = "messages";
 
 function serializeToolOutput(output: unknown): string {
   if (typeof output === "string") return output;
@@ -61,7 +61,10 @@ export async function runAgentLoop(
   }
 
   const tools = new Map((options.tools ?? []).map((tool) => [tool.name, tool]));
-  const messages: ModelInput["messages"] = [{ role: "user", content: userInput }];
+  // A configured store resumes the prior conversation; without one the loop
+  // keeps its existing one-shot, in-memory behavior.
+  const storedMessages = await options.sessionStore?.get(SESSION_MESSAGES_KEY);
+  const messages: Message[] = [...(storedMessages ?? []), { role: "user", content: userInput }];
 
   for (let iteration = 1; iteration <= maxIterations; iteration += 1) {
     const modelInput: ModelInput = {
@@ -78,6 +81,9 @@ export async function runAgentLoop(
     messages.push(assistantMessage);
 
     if (output.toolCalls.length === 0) {
+      // Persist only completed turns, avoiding a session file that ends halfway
+      // through a tool exchange when execution fails or reaches its limit.
+      await options.sessionStore?.set(SESSION_MESSAGES_KEY, messages);
       return { content: output.content, messages, iterations: iteration };
     }
 
