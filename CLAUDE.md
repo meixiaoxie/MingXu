@@ -9,6 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 运行环境：Node.js 22+，包管理器：pnpm 10+
 - 代码风格：ESM + 严格 TypeScript
 - 对外入口：`src/index.ts` 统一导出公共 API，CLI 从这里之外单独走 `src/cli`
+- 当前主线：`src/models` 已经开始承担统一模型协议、provider registry、runtime bridge 和 Anthropic 适配器的职责
 
 ## 常用命令
 
@@ -68,11 +69,13 @@ node dist/cli/entry.js --help
 
 这里是“模型适配层”。
 
-- `src/models/model-protocol.ts` / `model-events.ts` / `model-capabilities.ts`：定义通用模型协议
-- `src/models/provider-registry.ts`：模型提供方注册表，当前代码里已经有扩展位
-- `src/models/anthropic-provider.ts`：把内部消息格式转换成 Anthropic Messages API，再把响应转回来
+- `src/models/model-protocol.ts` / `model-events.ts` / `model-capabilities.ts`：定义通用模型协议和能力描述
+- `src/models/provider-registry.ts`：模型提供方注册表，负责按配置创建 provider
+- `src/models/model-runtime.ts` / `request-builder.ts`：把 core 的中立输入转成模型请求，再把模型响应转回 core 可用的输出
+- `src/models/provider-catalog.ts`：注册内置 provider
+- `src/models/anthropic-provider.ts`：Anthropic 的薄适配器，负责把内部协议映射到 Anthropic Messages API
 
-当前 CLI 走的是 `anthropic` provider；如果未来加别的模型，优先在这里补适配器，而不是改 core。
+当前 CLI 默认走的是 `anthropic` provider；如果未来加别的模型，优先在 registry 和模型层补适配器，不要把 provider 逻辑塞回 core。
 
 ### 3) `src/tools`
 
@@ -115,9 +118,9 @@ node dist/cli/entry.js --help
 
 这里把所有东西串起来。
 
-流程是：解析参数 → 读取配置 → 创建模型 provider → 注册内置工具 → 加载插件 → 构建 `Agent` → 执行 prompt → 输出结果。
+流程是：解析参数 → 读取配置 → 通过 provider registry 创建模型适配器 → 用 `model-runtime` 包一层成 core 可用的 `ModelProvider` → 构建 `Agent` → 执行 prompt → 输出结果。
 
-也就是说，CLI 不是另一套业务逻辑，只是把上面几层组装起来。
+也就是说，CLI 不是另一套业务逻辑，只是把上面几层组装起来。`src/plugins` 继续只负责工具扩展，不承接模型 provider。
 
 ## 测试结构
 
@@ -139,9 +142,12 @@ node dist/cli/entry.js --help
 
 1. `src/index.ts`：公共导出面
 2. `src/cli/main.ts`：整条启动链路
-3. `src/core/agent-loop.ts`：核心执行循环
-4. `src/models/anthropic-provider.ts`：模型适配方式
-5. `src/tools/tool-registry.ts`：工具如何注册和执行
+3. `src/models/model-protocol.ts`：统一模型请求/响应/事件协议
+4. `src/models/provider-registry.ts`：provider 注册与创建
+5. `src/models/model-runtime.ts`：模型结果和 core 之间的桥接
+6. `src/core/agent-loop.ts`：核心执行循环
+7. `src/models/anthropic-provider.ts`：模型适配方式
+8. `src/tools/tool-registry.ts`：工具如何注册和执行
 
 ## 当前实现里值得注意的点
 
