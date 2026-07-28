@@ -183,15 +183,6 @@ function createDefaultRunner(
       tools: [...toolRegistry.list()],
       ...(config.systemPrompt !== undefined ? { systemPrompt: config.systemPrompt } : {}),
       maxIterations: config.maxIterations,
-      ...(config.runtime?.limits !== undefined ? { runtimeLimits: config.runtime.limits } : {}),
-      eventSink,
-      redactor: { redactText, redactValue },
-      ...(config.audit?.failClosedForHighRisk !== undefined
-        ? { audit: { failClosedForHighRisk: config.audit.failClosedForHighRisk } }
-        : {}),
-      secretRefs,
-      ...(sessionStore !== undefined ? { sessionStore } : {}),
-      ...(sessionId !== undefined ? { sessionId } : {}),
     });
     const result = await agent.run(agentPrompt);
     await eventSink.flush?.();

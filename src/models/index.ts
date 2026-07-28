@@ -36,7 +36,7 @@ export {
 } from "./openai-compatible-format.js";
 export { buildGeminiRequest, parseGeminiResponse } from "./gemini-format.js";
 export { ModelExecutor } from "./model-executor.js";
-export { createRuntimeModelProvider, toModelOutput, toModelRequest } from "./request-builder.js";
+export { createRuntimeModelProvider, createRuntimeStreamFn, toModelOutput, toModelRequest } from "./request-builder.js";
 export { readProviderEnv } from "./provider-env.js";
 export { retryProviderRequest } from "./provider-retry.js";
 export { registerBuiltinProviders } from "./provider-catalog.js";

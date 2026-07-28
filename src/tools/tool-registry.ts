@@ -1,4 +1,4 @@
-import type { RunContext, Tool } from "../core/types.js";
+import type { RunContext, Tool, ToolExecutionContext } from "../core/types.js";
 
 export interface ToolExecutionRequest {
   readonly name: string;
@@ -23,7 +23,9 @@ export class ToolRegistry {
       throw new Error("Tool name cannot be empty");
     }
     if (name !== tool.name) {
-      throw new Error(`Tool name cannot have surrounding whitespace: ${tool.name}`);
+      throw new Error(
+        `Tool name cannot have surrounding whitespace: ${tool.name}`,
+      );
     }
     if (this.#tools.has(name)) {
       throw new Error(`Tool already registered: ${name}`);
@@ -49,25 +51,36 @@ export class ToolRegistry {
   }
 
   /** Accepts either separate arguments or a tool-call-shaped object for easy integration. */
-  async execute(name: string, input?: unknown): Promise<unknown>;
-  async execute(request: ToolExecutionRequest): Promise<unknown>;
+  async execute(
+    name: string,
+    input?: unknown,
+    context?: ToolExecutionContext,
+  ): Promise<unknown>;
+  async execute(
+    request: ToolExecutionRequest,
+    context?: ToolExecutionContext,
+  ): Promise<unknown>;
   async execute(
     nameOrRequest: string | ToolExecutionRequest,
-    input?: unknown,
+    inputOrContext?: unknown | ToolExecutionContext,
+    maybeContext?: ToolExecutionContext,
   ): Promise<unknown> {
-    const name = typeof nameOrRequest === "string" ? nameOrRequest : nameOrRequest.name;
-    const resolvedInput = typeof nameOrRequest === "string"
-      ? input
+    const isStringCall = typeof nameOrRequest === "string";
+    const name = isStringCall ? nameOrRequest : nameOrRequest.name;
+    const resolvedInput = isStringCall
+      ? inputOrContext
       : resolveRequestInput(nameOrRequest);
+    // 从 request 对象里取 context（旧接口），或者从第二个/第三个参数取（新接口）
+    const context = isStringCall
+      ? (maybeContext as RunContext | undefined)
+      : (nameOrRequest as ToolExecutionRequest).context;
+
     const tool = this.#tools.get(name);
 
     if (!tool) {
       throw new Error(`Unknown tool: ${name}`);
     }
-    return tool.execute(
-      resolvedInput,
-      typeof nameOrRequest === "string" ? undefined : nameOrRequest.context,
-    );
+    return tool.execute(resolvedInput, context);
   }
 }
 

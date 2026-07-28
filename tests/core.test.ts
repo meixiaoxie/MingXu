@@ -542,4 +542,55 @@ describe("Agent core", () => {
       redactor: { redactText, redactValue },
     })).rejects.toThrow("High-risk tool requires a healthy audit sink");
   });
+
+  it("rejects maxIterations less than 1", async () => {
+    const model: ModelProvider = {
+      generate: vi.fn().mockResolvedValue({ content: "ok", toolCalls: [] }),
+    };
+
+    await expect(
+      runAgentLoop("start", { model, maxIterations: 0 }),
+    ).rejects.toThrow("maxIterations must be a positive integer");
+
+    await expect(
+      runAgentLoop("start", { model, maxIterations: -1 }),
+    ).rejects.toThrow("maxIterations must be a positive integer");
+  });
+
+  it("throws when the loop reaches maxIterations with unresolved tool calls", async () => {
+    const model: ModelProvider = {
+      generate: vi.fn().mockResolvedValue({
+        content: "",
+        toolCalls: [{ id: "tool-1", name: "echo", input: {} }],
+      }),
+    };
+    const echoTool: Tool = {
+      name: "echo",
+      description: "Echoes input.",
+      inputSchema: {},
+      async execute(input) {
+        return { echoed: input };
+      },
+    };
+
+    const result = await runAgentLoop("start", {
+      model,
+      tools: [echoTool],
+      maxIterations: 3,
+    });
+
+    expect(result.terminationReason).toBe("max_iterations");
+  });
+
+  it("CLI default runner outputs final text", async () => {
+    // 验证 Agent.run() 返回最终文本，而不是结构化对象
+    const model: ModelProvider = {
+      generate: vi.fn().mockResolvedValue({ content: "final text", toolCalls: [] }),
+    };
+
+    const agent = new Agent({ model });
+    const result = await agent.run("test prompt");
+    expect(typeof result.content).toBe("string");
+    expect(result.content).toBe("final text");
+  });
 });

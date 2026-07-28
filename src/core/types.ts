@@ -6,6 +6,8 @@ import type { SecretRef } from "../redaction/secret-ref.js";
 import type { ApprovalStore } from "../approval/types.js";
 import type { PolicyEngine } from "../policy/types.js";
 import type { SessionStore } from "../session/session-store.js";
+// 从 model-protocol 导入 ModelUsage，避免重复定义
+import type { ModelUsage } from "../models/model-protocol.js";
 
 export type MessageRole = "user" | "assistant" | "tool";
 
@@ -256,3 +258,126 @@ export interface AgentLoopResult {
   terminationReason: RunTerminationReason;
   usage?: RunAccounting;
 }
+
+// ============================================================
+// 以下为新的 runtime 类型（Stage B+），保留上面的旧类型不动
+// ============================================================
+
+// ---- AgentMessage：runtime 内部的统一消息格式 ----
+// 旧的 Message 是模型层面用的（user/assistant/tool 三种），
+// 新的 AgentMessage 比它多出 summary 和 system 两种角色，
+// 还带了 id、createdAt、metadata 等额外字段。
+// 这样 compaction（压缩历史）和 session（保存记录）时有更多信息可用。
+
+export type AgentMessageRole = "user" | "assistant" | "toolResult" | "system" | "summary";
+
+export interface AgentMessageBase {
+  id: string;
+  role: AgentMessageRole;
+  content: string;
+  createdAt: string;
+  metadata?: Record<string, unknown>;
+}
+
+export type AgentMessage =
+  | (AgentMessageBase & { role: "user" })
+  | (AgentMessageBase & {
+      role: "assistant";
+      toolCalls?: ToolCall[];
+      stopReason?: string;
+      usage?: ModelUsage;
+    })
+  | (AgentMessageBase & {
+      role: "toolResult";
+      toolResult: ToolResult;
+    })
+  | (AgentMessageBase & {
+      role: "system";
+      visibleToModel?: boolean;
+    })
+  | (AgentMessageBase & {
+      role: "summary";
+      range?: { fromId: string; toId: string };
+    });
+
+// ---- AgentState：agent 的"脑内白板" ----
+// 任何时刻都可以通过 state 查看 agent 当前在干什么、有哪些消息、
+// 还有哪些工具在等待执行。是 Agent 类的"快照"。
+
+export interface AgentTurnState {
+  id: string;
+  startedAt: string;
+  iteration: number;
+}
+
+export interface AgentState {
+  systemPrompt?: string;
+  model: string;
+  messages: AgentMessage[];
+  tools: ToolDefinition[];
+  isStreaming: boolean;
+  pendingToolCalls: ToolCall[];
+  errorMessage?: string;
+  currentTurn?: AgentTurnState;
+}
+
+// ---- 控制能力 ----
+
+/** 队列模式：all = 清空全部待处理消息，one = 只取一条 */
+export type QueueMode = "all" | "one";
+
+// ---- ToolExecutionContext ----
+// 工具执行时的上下文，和旧的 RunContext 不同，这个更轻量，
+// 只包含工具执行时需要的最少信息。
+
+export interface ToolExecutionContext {
+  /** 取消信号 */
+  signal?: AbortSignal;
+  /** 进度更新回调，工具可以随时调用它报告中间结果 */
+  onUpdate?: (partialResult: unknown) => void | Promise<void>;
+  /** 额外元数据 */
+  metadata?: Record<string, unknown>;
+}
+
+/** 工具的执行模式：串行（sequential）或并行（parallel） */
+export type ToolExecutionMode = "sequential" | "parallel";
+
+// ---- StreamingAgentLoopOptions ----
+// 流式 Agent Loop 的完整配置。在 Stage E 中 runStreamingAgentLoop() 使用。
+// 这里提前声明类型，方便后面各阶段引用。
+
+import type { AgentEventSink } from "./events.js";
+import type { TransformContext } from "./context.js";
+import type { StreamFn } from "./stream-types.js";
+import type { AgentHooks } from "../hooks/hook-types.js";
+import type { JsonlSessionStore } from "../session/jsonl-session-types.js";
+import type { CompactionSettings } from "../context/compaction.js";
+
+export interface StreamingAgentLoopOptions {
+  /** 模型标识 */
+  model: string;
+  /** 流式函数入口 */
+  streamFn: StreamFn;
+  /** 初始消息列表（可以从 session 恢复） */
+  messages?: AgentMessage[];
+  /** 可用工具列表 */
+  tools?: Tool[];
+  /** 系统提示词 */
+  systemPrompt?: string;
+  /** 最大循环次数 */
+  maxIterations?: number;
+  /** 取消信号 */
+  signal?: AbortSignal;
+  /** 事件发送器 */
+  emit?: AgentEventSink;
+  /** 上下文转换函数 */
+  transformContext?: TransformContext;
+  /** hook 集合 */
+  hooks?: AgentHooks;
+  /** JSONL session store（每轮完成后写入） */
+  sessionStore?: JsonlSessionStore;
+  sessionId?: string;
+  /** compaction 设置，默认不开启 */
+  compaction?: CompactionSettings;
+}
+

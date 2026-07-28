@@ -1,10 +1,12 @@
 import type { ZodType } from "zod";
 
-import type { RunContext, Tool } from "../core/types.js";
+import type { RunContext, Tool, ToolExecutionContext } from "../core/types.js";
 
 /** A validated tool remains compatible with the shared, provider-neutral Tool contract. */
 export interface RuntimeTool<TInput = unknown, TOutput = unknown> extends Tool {
   readonly inputSchema: ZodType<TInput>;
+  /** 工具的执行模式：sequential（串行，默认）或 parallel（并行） */
+  readonly executionMode?: "sequential" | "parallel";
   execute(input: unknown, context?: RunContext): Promise<TOutput>;
 }
 
@@ -14,8 +16,13 @@ export interface RuntimeToolDefinition<TInput, TOutput> {
   readonly kind?: Tool["kind"];
   readonly riskLevel?: Tool["riskLevel"];
   readonly policyRootDirectory?: Tool["policyRootDirectory"];
+  /** 工具的执行模式：sequential（串行，默认）或 parallel（并行） */
+  readonly executionMode?: "sequential" | "parallel";
   readonly inputSchema: ZodType<TInput>;
-  execute(input: TInput, context?: RunContext): TOutput | Promise<TOutput>;
+  execute(
+    input: TInput,
+    context?: RunContext | ToolExecutionContext,
+  ): TOutput | Promise<TOutput>;
 }
 
 /**
@@ -38,13 +45,23 @@ export function defineTool<TInput, TOutput>(
     name,
     description,
     ...(definition.kind !== undefined ? { kind: definition.kind } : {}),
-    ...(definition.riskLevel !== undefined ? { riskLevel: definition.riskLevel } : {}),
-    ...(definition.policyRootDirectory !== undefined ? { policyRootDirectory: definition.policyRootDirectory } : {}),
+    ...(definition.riskLevel !== undefined
+      ? { riskLevel: definition.riskLevel }
+      : {}),
+    ...(definition.policyRootDirectory !== undefined
+      ? { policyRootDirectory: definition.policyRootDirectory }
+      : {}),
+    ...(definition.executionMode !== undefined
+      ? { executionMode: definition.executionMode }
+      : {}),
     inputSchema: definition.inputSchema,
     async execute(input: unknown, context?: RunContext): Promise<TOutput> {
       const parsedInput = definition.inputSchema.parse(input);
       context?.signal?.throwIfAborted();
+      // 旧 RunContext 和新 ToolExecutionContext 都传给 execute，
+      // 工具自己决定用哪个
       return definition.execute(parsedInput, context);
     },
   };
 }
+
