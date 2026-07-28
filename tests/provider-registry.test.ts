@@ -64,6 +64,17 @@ describe("ProviderRegistry", () => {
     ]);
   });
 
+  it("uses refreshed default endpoints for built-in OpenAI-compatible providers", () => {
+    const registry = registerBuiltinProviders(new ProviderRegistry());
+    const deepseekAdapter = registry.create({ provider: "deepseek", model: "deepseek-v4-flash", apiKey: "test-key" });
+    const kimiAdapter = registry.create({ provider: "kimi", model: "moonshot-v1", apiKey: "test-key" });
+    const zhipuAdapter = registry.create({ provider: "zhipu", model: "glm-4.5", apiKey: "test-key" });
+
+    expect(deepseekAdapter.provider).toBe("deepseek");
+    expect(kimiAdapter.provider).toBe("kimi");
+    expect(zhipuAdapter.provider).toBe("zhipu");
+  });
+
   it("resolves aliases while direct provider names keep their normal match", () => {
     const definition = createDefinition();
     const registry = new ProviderRegistry().registerProvider(definition);

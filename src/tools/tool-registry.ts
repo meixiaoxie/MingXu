@@ -1,9 +1,10 @@
-import type { Tool } from "../core/types.js";
+import type { RunContext, Tool } from "../core/types.js";
 
 export interface ToolExecutionRequest {
   readonly name: string;
   readonly input?: unknown;
   readonly arguments?: unknown;
+  readonly context?: RunContext;
 }
 
 /** Stores tools by name and provides the single execution entry used by the agent loop. */
@@ -35,6 +36,10 @@ export class ToolRegistry {
     return this.#tools.has(name);
   }
 
+  unregister(name: string): boolean {
+    return this.#tools.delete(name);
+  }
+
   get(name: string): Tool | undefined {
     return this.#tools.get(name);
   }
@@ -59,7 +64,10 @@ export class ToolRegistry {
     if (!tool) {
       throw new Error(`Unknown tool: ${name}`);
     }
-    return tool.execute(resolvedInput);
+    return tool.execute(
+      resolvedInput,
+      typeof nameOrRequest === "string" ? undefined : nameOrRequest.context,
+    );
   }
 }
 

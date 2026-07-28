@@ -1,21 +1,56 @@
 export interface CliArguments {
   readonly configPath: string;
   readonly prompt: string | undefined;
+  readonly model: string | undefined;
   readonly help: boolean;
   readonly version: boolean;
+  readonly command?: "resume" | "sessions" | "init" | "doctor";
+  readonly commandTarget?: string;
+  readonly profile?: "minimal" | "secure-local";
+  readonly online?: boolean;
+  readonly debugProvider?: boolean;
 }
 
 /** Parses a deliberately small CLI surface without requiring a command-line package. */
 export function parseArgs(argv: readonly string[]): CliArguments {
   let configPath = "mingxu.config.json";
   let prompt: string | undefined;
+  let model: string | undefined;
   let help = false;
   let version = false;
+  let command: CliArguments["command"];
+  let commandTarget: string | undefined;
+  let profile: CliArguments["profile"];
+  let online = false;
+  let debugProvider = false;
   const positionals: string[] = [];
 
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
-    if (argument === "--help" || argument === "-h") {
+    if (argument === "resume") {
+      command = "resume";
+      const next = argv[index + 1];
+      if (next && !next.startsWith("-")) {
+        commandTarget = next;
+        index += 1;
+      }
+    } else if (argument === "sessions") {
+      command = "sessions";
+    } else if (argument === "init") {
+      command = "init";
+    } else if (argument === "doctor") {
+      command = "doctor";
+    } else if (argument === "--profile") {
+      const value = readOptionValue(argv, ++index, argument);
+      if (value !== "minimal" && value !== "secure-local") {
+        throw new Error(`Unsupported profile: ${value}`);
+      }
+      profile = value;
+    } else if (argument === "--online") {
+      online = true;
+    } else if (argument === "--debug-provider") {
+      debugProvider = true;
+    } else if (argument === "--help" || argument === "-h") {
       help = true;
     } else if (argument === "--version" || argument === "-v") {
       version = true;
@@ -23,6 +58,8 @@ export function parseArgs(argv: readonly string[]): CliArguments {
       configPath = readOptionValue(argv, ++index, argument);
     } else if (argument === "--prompt" || argument === "-p") {
       prompt = readOptionValue(argv, ++index, argument);
+    } else if (argument === "--model" || argument === "-m") {
+      model = readOptionValue(argv, ++index, argument);
     } else if (argument === "--") {
       positionals.push(...argv.slice(index + 1));
       break;
@@ -41,8 +78,14 @@ export function parseArgs(argv: readonly string[]): CliArguments {
   return {
     configPath,
     prompt: prompt ?? positionalPrompt,
+    model,
     help,
     version,
+    ...(command !== undefined ? { command } : {}),
+    ...(commandTarget !== undefined ? { commandTarget } : {}),
+    ...(profile !== undefined ? { profile } : {}),
+    ...(online ? { online } : {}),
+    ...(debugProvider ? { debugProvider } : {}),
   };
 }
 

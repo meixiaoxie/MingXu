@@ -1,8 +1,9 @@
 import { z } from "zod";
 
+import { normalizeModelError } from "./execution-errors.js";
 import { defaultModelCapabilities } from "./model-capabilities.js";
 import { readProviderEnv } from "./provider-env.js";
-import type { ModelAdapter } from "./provider-registry.js";
+import type { ModelExecutionOptions, ModelAdapter } from "./provider-registry.js";
 import type { ModelRequest, ModelResponse, ModelToolCall } from "./model-protocol.js";
 
 const ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages";
@@ -24,6 +25,12 @@ interface AnthropicBlock {
   input?: unknown;
   stop_reason?: unknown;
   content?: unknown;
+  usage?: {
+    input_tokens?: unknown;
+    output_tokens?: unknown;
+    cache_read_input_tokens?: unknown;
+    cache_creation_input_tokens?: unknown;
+  };
 }
 
 export class AnthropicProvider implements ModelAdapter {
@@ -38,43 +45,57 @@ export class AnthropicProvider implements ModelAdapter {
     this.#baseUrl = validateAnthropicBaseUrl(parsed.baseUrl ?? ANTHROPIC_MESSAGES_URL);
   }
 
-  async generate(request: ModelRequest): Promise<ModelResponse> {
+  async generate(request: ModelRequest, options: ModelExecutionOptions = {}): Promise<ModelResponse> {
     if (!this.#apiKey) {
       throw new Error("Anthropic apiKey is required in config or ANTHROPIC_API_KEY");
     }
 
-    const response = await fetch(this.#baseUrl, {
-      method: "POST",
-      // Do not follow redirects: a redirected request could forward the API key
-      // outside the trusted Anthropic endpoint validated in the constructor.
-      redirect: "error",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": this.#apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: request.modelId,
-        max_tokens: request.maxTokens ?? 1024,
-        ...(request.system !== undefined ? { system: request.system } : {}),
-        messages: request.messages.map(toAnthropicMessage),
-        ...(request.tools?.length
-          ? {
-              tools: request.tools.map((tool) => ({
-                name: tool.name,
-                description: tool.description,
-                input_schema: tool.inputSchema,
-              })),
-            }
-          : {}),
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Anthropic request failed with status ${response.status}`);
+    let response: Response;
+    try {
+      response = await fetch(this.#baseUrl, {
+        method: "POST",
+        // Do not follow redirects: a redirected request could forward the API key
+        // outside the trusted Anthropic endpoint validated in the constructor.
+        redirect: "error",
+        ...(options.signal ? { signal: options.signal } : {}),
+        headers: {
+          "content-type": "application/json",
+          "x-api-key": this.#apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: request.modelId,
+          max_tokens: request.maxTokens ?? 1024,
+          ...(request.system !== undefined ? { system: request.system } : {}),
+          messages: request.messages.map(toAnthropicMessage),
+          ...(request.tools?.length
+            ? {
+                tools: request.tools.map((tool) => ({
+                  name: tool.name,
+                  description: tool.description,
+                  input_schema: tool.inputSchema,
+                })),
+              }
+            : {}),
+        }),
+      });
+    } catch (error) {
+      throw normalizeModelError({ provider: this.provider, error });
     }
 
-    return parseAnthropicResponse(await response.json());
+    if (!response.ok) {
+      throw normalizeModelError({
+        provider: this.provider,
+        error: new Error(`Anthropic request failed with status ${response.status}`),
+        status: response.status,
+      });
+    }
+
+    try {
+      return parseAnthropicResponse(await response.json());
+    } catch (error) {
+      throw normalizeModelError({ provider: this.provider, error });
+    }
   }
 }
 
@@ -163,5 +184,22 @@ function parseAnthropicResponse(value: unknown): ModelResponse {
     text: text.join("\n"),
     toolCalls,
     ...(typeof response.stop_reason === "string" ? { stopReason: response.stop_reason } : {}),
+    ...(response.usage ? {
+      usage: {
+        ...(typeof response.usage.input_tokens === "number" ? { inputTokens: response.usage.input_tokens } : {}),
+        ...(typeof response.usage.output_tokens === "number" ? { outputTokens: response.usage.output_tokens } : {}),
+        ...(
+          typeof response.usage.input_tokens === "number" && typeof response.usage.output_tokens === "number"
+            ? { totalTokens: response.usage.input_tokens + response.usage.output_tokens }
+            : {}
+        ),
+        ...(typeof response.usage.cache_read_input_tokens === "number"
+          ? { cacheReadTokens: response.usage.cache_read_input_tokens }
+          : {}),
+        ...(typeof response.usage.cache_creation_input_tokens === "number"
+          ? { cacheWriteTokens: response.usage.cache_creation_input_tokens }
+          : {}),
+      },
+    } : {}),
   };
 }

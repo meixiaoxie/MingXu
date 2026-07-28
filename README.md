@@ -1,28 +1,298 @@
 # mingxu
 
-一个最小化的 TypeScript Agent Runtime 骨架。它现在已经支持：
+`mingxu` 是一个最小化的 TypeScript Agent Runtime 骨架。你可以把它理解成“Agent 的发动机底盘”：它先把模型调用、工具执行、配置加载、插件扩展和会话保存这些基础零件拼起来，让你能从源码跑通一个最小可用的 Agent。
 
-- 旧版单模型配置
-- 新版多模型配置
-- provider 默认参数
-- provider 别名（alias）
-- 自定义 provider 模块动态加载
+> 当前版本是 `0.1.0` 开发阶段，npm 包仍为 `private`，请从源码运行。README 只描述现在已经真实具备的能力；规划中的能力见 `docs/plans/development-roadmap.md`。
 
-这份文档重点讲**新配置结构怎么用**。
+## 当前能力
+
+现在已经可以真实使用的能力有：
+
+- 最小 Agent Loop：用户消息 → 模型响应 → 工具调用 → 下一轮模型请求。
+- CLI 参数：`--config`、`--prompt`、`--help`、`--version`。
+- 新版多模型配置：`defaultModel + models`。
+- 旧版单模型配置兼容：`model` 会自动归一化成新版结构。
+- 内建 provider：`anthropic`、`openai-compatible`、`openai`、`deepseek`、`kimi`、`zhipu`、`glm`、`gemini`、`custom`。
+- provider 别名、provider 默认参数、自定义 provider 模块加载。
+- 内建 `echo`、`readFile` 工具和统一 Tool Registry。
+- 本地 JavaScript 插件动态加载；当前插件只支持注册 Tool。
+- 可选版本化本地 Session 文档，支持继续同一段对话、列最近 Session 和 `resume` 恢复。
+- 可选版本化 runtime 事件与内建 JSONL audit 写盘。
+- 最小核心 Policy / Approval 链：当前 tool call 已支持规范化、`allow/deny/ask` 决策、预授权匹配、非交互默认拒绝和审计事件。
+- 最小 `secretRef`：当前支持 `env:` 引用写法，并在错误、session 与审计路径上做基础脱敏。
+- 运行时预算与结果边界：最大轮次 / 模型请求 / 工具调用限制、消息数裁剪、工具大结果 Artifact 降载、usage 累计与稳定终止原因。
+- TypeScript 公共 API，可嵌入其他 Node.js 项目。
+
+这里有两个边界要先说清楚，避免把“已经有一点雏形”和“已经正式支持”混在一起：
+
+- `customProviders.module` 现在可以作为**实验性兼容入口**使用，也就是“先让你从本地模块接进一个自定义 provider”；它还不是稳定的正式 provider 插件 API。
+- README 现在不把 streaming（流式输出，也就是模型边生成边返回）算作 v0.1 已承诺能力。路线图已经明确要求把这项能力按真实状态收紧，避免文档先说得太满。
+
+## 当前还没有实现
+
+下面这些能力已经在路线图里，但当前版本还不能宣称已经完成：
+
+- `mingxu init`、`mingxu doctor`、`mingxu plugin` 等子命令。
+- plugin manifest、插件权限审批、allowlist / blocklist。
+- 完整的企业级 Policy / Approval 平台（当前只有最小核心授权链，主要覆盖工具调用与文件访问）。
+- MCP connector、长期 Memory、声明式 Agent Preset。
+- 不可信插件隔离、容器沙箱、调度和多 Agent Workflow。
+- 企业级 Secret Provider（当前只支持最小 `env:` secretRef）。
+
+如果你想看这些能力后面怎么推进，可以看：
+
+- 开发路线图：`docs/plans/development-roadmap.md`
+- v0.1 发布门禁记录：`docs/plans/v0.1-release-gate.md`
+- 架构决策文档：
+  - `docs/architecture/adr-001-v0x-deployment-mode.md`
+  - `docs/architecture/adr-002-plugin-trust-and-isolation.md`
+  - `docs/architecture/adr-003-core-plugin-boundaries.md`
+  - `docs/architecture/adr-004-runtime-entity-model.md`
+
+## v0.1 当前能力边界
+
+这部分可以理解成“这版产品现在到底算做到哪一步”。路线图这次把边界收得更严格，所以 README 也要跟着说得更准确。
+
+### 现在可以真实说已经能做的事
+
+- 跑通最小端到端链路：配置读取 → 默认模型选择 → provider 加载 → 插件加载 → Agent 执行。
+- 使用 provider 别名和 provider 默认参数。
+- 加载本地自定义 provider 模块。
+- 加载本地工具插件。
+- 保存会话文件。
+
+### 现在不能真实宣称已经完成的事
+
+- 不能说 v0.1 发布门禁已经完整通过。
+- 不能说插件平台已经完成到可以支持所有插件类型。
+- 不能说已经有 plugin manifest、权限审批、审计、allowlist、blocklist。
+- 不能说已经支持 provider 插件、memory 插件、MCP 接入、插件安装命令。
+- 不能说当前 CLI 不支持 `--model <key>`；这个能力已经实现，但 README 仍不能把它说成“多模型完整调度系统”。
+- 不能说现在还只有“messages KV”级会话保存；当前已经有版本化本地 Session 文档、revision 冲突保护、legacy 迁移和最小 `resume` / recent sessions 能力，但还不是企业级会话数据库。
+- 不能说已经有完整企业级 Policy / Approval 平台；当前只有最小核心授权链和版本化事件/审计主链。
+- 不能说已经支持 streaming，或把它当成 v0.1 对外承诺的一部分。
+
+### 这版 v0.1 的插件范围
+
+当前 v0.1 里的“插件”要收敛理解成：
+
+- 本地 ESM / JS 工具插件。
+- 通过 `registerTool` 扩展现有工具表。
+- `customProviders.module` 只是实验性兼容入口，不纳入稳定 plugin API 承诺。
+- 不能把它描述成已经具备多类型插件生态的平台。
+
+换句话说，现在的插件更像“给 Agent 增加一个本地小工具”，还不是完整的插件生态平台。
+
+## 安全边界
+
+### 本地插件是可信代码
+
+当前插件直接在 `mingxu` 的 Node.js 进程里执行，可以访问 `process.env`、文件系统和网络。
+
+> 安装或配置插件，等于执行第三方代码。
+
+当前版本没有 manifest 和沙箱。只加载你已经审查并信任的本地插件。自定义 provider 模块同样属于可信本地代码。
+
+如果你把“信任等级”理解成门卫的放行规则，现在 v0.x 路线图收敛到的长期方向是：插件要么是 `trusted_local`（你明确允许的本地可信代码），要么是 `blocked`（禁止加载）。也就是说，它不是“已经隔离好的安全插件系统”，而是“你自己决定要不要把这段本地代码放进进程里执行”。
+
+### 内建文件工具
+
+`readFile` 默认只能读取启动 `mingxu` 时当前工作目录内的 UTF-8 文件，单个文件默认不超过 1 MiB，并会检查符号链接是否逃出目录。
+
+当前版本已经把 `readFile` 接进最小核心 Policy 链，也就是说模型提出读取文件时，runtime 会先把请求规范化成文件访问动作，再做 allow/deny/ask 决策，然后才真正执行工具。同时工具内部仍保留 `realpath`、根目录和大小限制检查，形成“双保险”。
+
+不过这还不是完整的文件治理平台：目前主要覆盖读取、根目录约束、非交互默认拒绝和预授权匹配；更细的敏感文件规则、写入/删除策略和企业级文件审批范围还在后续阶段。
+
+### API Key
+
+不要把真实 API Key 写进 `mingxu.config.json`，也不要提交到 Git。当前更推荐把 key 放到环境变量里，让 provider 在运行时读取。
+
+## 运行环境与支持范围
+
+支持矩阵就是“项目在哪些环境里会被持续检查”的清单。目前的质量基线如下：
+
+| 项目 | 支持范围 | 自动验证 |
+| --- | --- | --- |
+| Node.js | 22 LTS、24 LTS | GitHub Actions |
+| 包管理器 | pnpm 10（仓库当前固定为 10.12.1） | GitHub Actions |
+| 操作系统 | Ubuntu、Windows、macOS 的 GitHub Actions 最新稳定镜像 | GitHub Actions |
+| 模块格式 | ESM（ECMAScript Module，Node.js 的现代模块格式） | 构建与打包 smoke test |
+
+`package.json` 会拒绝 Node.js 22 以下版本。Node.js 22 和 24 是当前明确持续测试的版本；其他大于 22 的非 LTS 版本可能可用，但不属于质量保证范围。
+
+当前仓库已经准备好了发布所需的技术门禁，包括：
+
+- `pnpm test:smoke` 的真实 tarball 安装验证
+- `pnpm pack:dry-run` 的 tarball 内容预览
+- `.github/workflows/release.yml` 中基于 OIDC / provenance 的发布流程定义
+
+但“真正执行对外发布”仍应以 release gate 和人工在线验收记录为准，不能只因为本地命令通过就默认已经对外发布成功。
+
+## 安装与质量检查
+
+```bash
+pnpm install --frozen-lockfile
+pnpm typecheck
+pnpm test
+pnpm build
+pnpm test:smoke
+pnpm pack:dry-run
+```
+
+这些命令依次负责：
+
+- 按锁文件安装依赖。
+- 检查 TypeScript 类型。
+- 运行测试。
+- 生成 `dist` 构建产物。
+- 执行 smoke test（冒烟测试，也就是用最短路径确认成品能启动）。
+- 预览最终 npm tarball 会打进哪些文件。
+
+当前 smoke test 会真的打出 npm 安装包，在临时目录安装它，然后验证：
+
+- 安装后的 `mingxu` CLI 能执行 `--help`；
+- 安装包包含 CLI、公共 JavaScript API 和类型声明；
+- 安装后的公共 API 能被 Node.js 正常导入；
+- 能从空目录完成 `init -> 离线 run -> doctor -> session -> audit` 的最小闭环。
+
+GitHub Actions 会在提交到 `main`、Pull Request 和手动触发时，对上面的 Node.js 与操作系统组合运行安装、类型检查、完整测试、构建和 smoke test。正式发布则通过单独的 release workflow 执行 `typecheck`、`test`、`build`、`test:smoke`、`npm pack --dry-run` 和带 provenance 的 npm 发布流程。Vitest 现在不再允许“没有任何测试也算通过”，这样测试文件被误删时 CI 会直接失败。
+
+## 快速开始
+
+### 1. 安装依赖
+
+```powershell
+pnpm install
+```
+
+如果 Windows PowerShell 阻止执行 `pnpm.ps1`，可以直接使用：
+
+```powershell
+pnpm.cmd install
+```
+
+### 2. 设置模型凭据
+
+以 Anthropic 为例，在当前 PowerShell 会话中设置：
+
+```powershell
+$env:ANTHROPIC_API_KEY = "你的 API Key"
+```
+
+这个值只在当前终端窗口有效，不会写入项目配置。
+
+### 3. 创建配置
+
+你现在可以直接用 CLI 生成起步配置，而不是手写整个 JSON。
+
+最小配置：
+
+```powershell
+node dist/cli/entry.js init --profile minimal
+```
+
+如果你更希望一开始就打开本地 Session、Audit 和更保守的运行限制，可以使用：
+
+```powershell
+node dist/cli/entry.js init --profile secure-local
+```
+
+这会在当前目录生成 `mingxu.config.json`。如果文件已经存在，CLI 会拒绝覆盖，避免把你现有配置悄悄改坏。
+
+如果你更想自己写，也可以在项目根目录手动创建 `mingxu.config.json`：
+
+```json
+{
+  "name": "mingxu",
+  "systemPrompt": "You are a helpful agent.",
+  "defaultModel": "primary",
+  "models": {
+    "primary": {
+      "provider": "anthropic",
+      "model": "claude-sonnet-5"
+    }
+  },
+  "maxIterations": 10,
+  "plugins": []
+}
+```
+
+如果你只有一个模型，这已经够用了。
+
+### 4. 检查配置和本地环境
+
+生成配置后，你可以先跑一次本地自检：
+
+```powershell
+node dist/cli/entry.js doctor
+```
+
+默认的 `doctor` 是**离线检查**，主要看：
+
+- 配置文件能不能读、格式对不对
+- 模型/provider 引用是不是成立
+- `env:` secretRef 对应的环境变量是否存在
+- 插件路径、session 路径、audit 路径是否合理
+
+如果你明确想检查真实模型连通性，可以显式启用在线探针：
+
+```powershell
+node dist/cli/entry.js doctor --online
+```
+
+`doctor --online` 会访问你配置的 provider，所以它会额外提示网络访问和可能费用。默认不加 `--online` 时不会触网。
+
+### 5. 构建并运行
+
+```powershell
+pnpm build
+node dist/cli/entry.js --config mingxu.config.json "Say hello"
+```
+
+也可以使用 `--prompt`：
+
+```powershell
+node dist/cli/entry.js --config mingxu.config.json --prompt "Say hello"
+```
+
+## CLI
+
+当前 CLI 既支持直接运行 prompt，也支持几个最小子命令：
+
+```text
+Usage: mingxu [options] [prompt]
+
+Commands:
+  init                    Create a starter mingxu.config.json in the current directory
+  doctor                  Check config, env, plugins, session, and audit wiring
+  resume [sessionId]      Resume a saved session and continue with a new prompt
+  sessions                List recent sessions
+
+Options:
+  -c, --config <path>  JSON configuration file
+  -p, --prompt <text>  Prompt to send to the agent
+  -m, --model <name>   Named model from config.models
+      --profile <name> Init profile: minimal or secure-local
+      --online         Allow doctor to perform a live provider connectivity probe
+  -h, --help           Show this help
+  -v, --version        Show the version
+```
+
+默认配置路径是当前工作目录下的 `mingxu.config.json`。Prompt 可以作为位置参数传入，也可以使用 `--prompt`，不能同时用两种方式。
+
+如果启用了 `audit.enabled` 和 `audit.file`，运行时会把结构化事件按 JSONL 形式写入审计文件。当前事件已经覆盖 run、模型请求、工具调用、插件加载和 session 写入这些主链路节点。高风险工具还可以配合 `audit.failClosedForHighRisk` 在审计不可用时拒绝执行。
 
 ## 先理解这套配置在做什么
 
 可以把新配置理解成三层：
 
-1. **`models`**：你要用哪些“模型档案”
-   - 比如：默认聊天模型、便宜模型、内部网关模型
-2. **`providers`**：这些模型背后连的是哪些“厂家/连接方式”
-   - 比如：Anthropic、OpenAI、公司内部别名
-3. **`customProviders`**：要不要从你自己的模块里，动态注册新的 provider
+1. **`models`**：你要用哪些“模型档案”。
+   - 比如：默认聊天模型、便宜模型、内部网关模型。
+2. **`providers`**：这些模型背后连的是哪些“厂家 / 连接方式”。
+   - 比如：Anthropic、OpenAI、公司内部别名。
+3. **`customProviders`**：要不要从你自己的模块里，动态注册新的 provider。
 
 而 **`defaultModel`** 就像“默认开哪辆车”。
-
----
 
 ## 最小可用样例
 
@@ -34,8 +304,7 @@
   "models": {
     "primary": {
       "provider": "anthropic",
-      "model": "claude-sonnet-5",
-      "apiKey": "test-key"
+      "model": "claude-sonnet-5"
     }
   }
 }
@@ -43,15 +312,11 @@
 
 它的意思是：
 
-- 默认模型叫 `primary`
-- `primary` 这份档案使用 `anthropic`
-- 实际模型名是 `claude-sonnet-5`
+- 默认模型叫 `primary`。
+- `primary` 这份档案使用 `anthropic`。
+- 实际模型名是 `claude-sonnet-5`。
 
-如果你只需要一个模型，这已经够用了。
-
----
-
-## 旧版配置仍然兼容
+## 旧版单模型配置仍然兼容
 
 旧版写法仍然可用：
 
@@ -59,8 +324,7 @@
 {
   "model": {
     "provider": "anthropic",
-    "model": "claude-sonnet-5",
-    "apiKey": "test-key"
+    "model": "claude-sonnet-5"
   }
 }
 ```
@@ -72,9 +336,7 @@
 
 所以老配置不用立刻全改。
 
----
-
-## 推荐的新配置结构
+## 多模型配置
 
 如果你以后要支持多个模型，推荐这样写：
 
@@ -100,15 +362,37 @@
 
 这表示：
 
-- 默认用 `primary`
-- `primary` 走 Anthropic
-- `cheap` 走 OpenAI
+- 默认用 `primary`。
+- `primary` 走 Anthropic。
+- `cheap` 走 OpenAI。
 
----
+如果你的 `models` 里配置了多个模型条目，当前实现会默认选择 `defaultModel`，也支持通过 CLI 的 `--model <name>` 临时切换到 `config.models` 里另一个已命名模型。
 
-## `providers`：给内建 provider 起别名
+也就是说，多模型配置结构和“单次运行临时切换模型”的最小入口都已经存在；但它还不等于完整的多模型编排系统，像自动路由、预算分配、Fallback 策略这些能力仍在路线图后续阶段。
 
-如果你不想直接把模型写成 `openai`，而想写成你自己的业务名字，可以用 `providers`。
+## 内建 Provider
+
+| Provider | 默认环境变量 | 说明 |
+| --- | --- | --- |
+| `anthropic` | `ANTHROPIC_API_KEY` | Anthropic Messages API |
+| `openai` | `OPENAI_API_KEY` | OpenAI-compatible |
+| `openai-compatible` | `OPENAI_COMPATIBLE_API_KEY` | 可配置兼容端点 |
+| `deepseek` | `DEEPSEEK_API_KEY` | OpenAI-compatible |
+| `kimi` | `KIMI_API_KEY` | OpenAI-compatible |
+| `zhipu` | `ZHIPU_API_KEY` | OpenAI-compatible |
+| `glm` | `GLM_API_KEY` | OpenAI-compatible |
+| `gemini` | `GEMINI_API_KEY` | Google Gemini API |
+| `custom` | 无 | 需要显式配置 HTTPS `baseUrl`，可选 `apiKey` |
+
+当前 Anthropic 和 Gemini 适配器只允许官方 HTTPS API 地址。OpenAI-compatible 和 Custom Provider 也要求 HTTPS，并拒绝 URL 中的凭据和 fragment。
+
+> 说明：这里说的是当前 provider 接入能力，不代表已经存在正式稳定的 provider 插件 API。`customProviders.module` 仍只是实验性兼容入口。
+
+## Provider 别名与默认参数
+
+### 给内建 provider 起别名
+
+如果你不想直接把模型写成 `openai`，而想写成自己的业务名字，可以用 `providers`：
 
 ```json
 {
@@ -125,23 +409,16 @@
 }
 ```
 
-这表示：
+当前别名规则：
 
-- `company-chat-2026` 只是你自己起的别名
-- 它最终会映射到内建的 `openai` adapter
+- alias 会自动去掉首尾空格。
+- alias 区分大小写。
+- alias 只能直接指向一个已注册的正式 provider。
+- 不支持 alias 再指向另一个 alias。
 
-### 这条规则目前要注意
+### 共享 provider 默认参数
 
-- alias 会自动去掉首尾空格
-- alias **区分大小写**
-- alias 只能直接指向一个已注册的正式 provider
-- 不支持 alias 再指向另一个 alias
-
----
-
-## provider 默认参数：把公共连接配置放到 `providers`
-
-如果多个模型共用同一套连接参数，可以把默认值放在 `providers` 里。
+如果多个模型共用同一套连接参数，可以把默认值放在 `providers` 里：
 
 ```json
 {
@@ -158,27 +435,20 @@
   },
   "providers": {
     "openai": {
-      "apiKey": "test-key",
+      "apiKey": "env:OPENAI_API_KEY",
       "baseUrl": "https://api.openai.com/v1/chat/completions"
     }
   }
 }
 ```
 
-这表示：
+覆盖规则是：
 
-- 两个模型都走 `openai`
-- 它们默认共用同一个 `apiKey` 和 `baseUrl`
+- `providers` 里的是默认值。
+- `models.<name>` 里的是最终值。
+- 如果同一个字段两边都写了，模型级配置优先。
 
-### 覆盖规则
-
-- `providers` 里的是**默认值**
-- `models.<name>` 里的是**最终值**
-- 如果同一个字段两边都写了，**模型级配置优先**
-
----
-
-## `customProviders.module`：一次性加载一个自定义 provider 模块
+## 自定义 Provider 模块
 
 如果你想在启动时动态注册自定义 provider，可以这样写：
 
@@ -199,202 +469,137 @@
 
 这里的 `./providers/register-gateway.mjs` 是一个本地 ESM 文件。
 
-### 模块最小格式
+模块必须导出 `register(registry)` 或默认注册函数。相对路径按**配置文件所在目录**解析，不是按你执行命令时所在目录解析。参考实现位于 `examples/providers/register-gateway.mjs`。
 
-支持这两种写法：
+除了共享 `module`，你也可以按 provider 名写默认配置，也就是 `customProviders.<name>`。这样可以把 provider 级默认参数放在一起，再由 `models.<name>` 覆盖局部字段。
 
-#### 具名导出
+## 本地 Tool 插件
 
-```js
-export function register(registry) {
-  registry.register({
-    provider: "gateway",
-    capabilities: {
-      supportsTools: true,
-      supportsStreaming: false,
-      supportsImages: false,
-      supportsStructuredOutput: true,
-      supportsRefusal: true,
-      supportsFallback: false,
-      supportsEffort: false,
-      supportsPromptCaching: false,
-      supportsMidConversationSystem: false,
-      maxContext: 128000,
-      maxOutput: 8192
-    },
-    create(config) {
-      return {
-        provider: "gateway",
-        capabilities: this.capabilities,
-        async generate(request) {
-          return {
-            text: `custom:${request.modelId}`,
-            toolCalls: []
-          }
-        }
-      }
-    }
-  })
-}
-```
-
-#### 默认导出
-
-```js
-export default function register(registry) {
-  // 同上
-}
-```
-
-### 这条路径怎么解析
-
-- 相对路径是**相对于配置文件所在目录**解析的
-- 不是相对于你运行命令时所在目录解析的
-
-这点很重要，能避免“换个命令目录就找不到模块”的问题。
-
----
-
-## `customProviders.<name>`：按名字声明自定义 provider 默认值
-
-除了共享 `module`，你也可以按 provider 名写默认配置：
+配置中的 `plugins` 可以继续写成简单路径数组，也可以写成带信任声明的对象：
 
 ```json
 {
-  "defaultModel": "gateway-model",
-  "models": {
-    "gateway-model": {
-      "provider": "gateway",
-      "model": "internal-chat",
-      "apiKey": "model-level-key"
+  "plugins": [
+    "./plugins/my-tools.mjs",
+    {
+      "path": "./plugins/internal-tools.mjs",
+      "trust": "trusted_local"
     }
-  },
-  "customProviders": {
-    "gateway": {
-      "module": "./providers/register-gateway.mjs",
-      "baseUrl": "https://gateway.example.com/v1/chat/completions",
-      "apiKey": "provider-level-key"
-    }
+  ]
+}
+```
+
+当前 v0.1 的插件配置里，`trust` 只有两种有效值：
+
+- `trusted_local`：明确允许加载这段本地可信代码。
+- `blocked`：明确禁止加载；即使写在配置里，CLI 也会在真正导入前拒绝它。
+
+这里的“信任”要理解成“允不允许把这段本地代码放进当前进程执行”，不是沙箱等级。`trusted_local` 并不表示插件已经被隔离。
+
+插件必须默认导出插件对象，或者导出名为 `plugin` 的对象，并提供：
+
+- 非空 `name`
+- `setup(context)` 函数
+
+当前 `PluginContext` 只稳定 `registerTool(tool)` 这一项。相对插件路径现在统一按**配置文件目录**解析，不是按启动 CLI 时的当前工作目录解析。这一点和 `customProviders.module` 的相对路径规则保持一致，目的是让“配置文件写在哪里，就从哪里解释相对插件路径”这件事更稳定、更不容易出错。
+
+CLI 在加载每个插件前，还会输出来源和风险提示。你可以把它理解成“上车前先看车牌和安全警示”：CLI 会告诉你声明路径、实际解析后的本地文件路径，以及这次加载的 `trust` 值，同时明确提醒你——**加载插件等于执行第三方代码**。
+
+这里也要特别提醒三件事：
+
+- 现在的插件能力只稳定到“注册 Tool”这一层，不要把它理解成完整插件平台。
+- 通过 `registerTool` 注册进来的插件工具，运行时会和内建工具一样，统一经过 ToolExecutor、Policy、Approval、Budget、AbortSignal 和 Audit 主链；但这只对“通过核心入口接入的调用”成立，不代表进程内插件本身已经变成沙箱。
+- `customProviders.module` 仍只是实验性兼容入口，不纳入 v0.1 稳定 plugin API 承诺。
+
+## 会话文件
+
+当前版本已经把原来的“`messages` KV”保存方式升级成**版本化本地 Session 文档**。你可以把它理解成：不只是“记住聊天内容”，而是会记住这次运行对应的 Session、Run、Turn、工具调用和审批轨迹，并且文件本身带 `schemaVersion` 与 `revision`。
+
+如果仍使用旧配置里的 `sessionFile`，CLI 会把它映射到一个 session 目录模式下工作；如果使用新的 `session.dir`，则会把每个 Session 保存成独立 JSON 文档。
+
+最小配置示例：
+
+```json
+{
+  "session": {
+    "enabled": true,
+    "dir": "./.mingxu/sessions",
+    "save": true,
+    "retentionDays": 7
   }
 }
 ```
 
-这里表示：
+再次运行时，你可以：
 
-- `gateway` 这个 provider 由本地模块注册
-- `customProviders.gateway` 提供 provider 级默认参数
-- `models.gateway-model` 可以继续覆盖其中某些字段
+- 继续用默认最近会话恢复执行
+- 用 `mingxu resume <sessionId> --prompt "..."` 指定恢复某个会话
+- 用 `mingxu sessions` 查看最近的 Session 列表
 
----
+当前版本会在 session 持久化前做基础脱敏，所以常见 `apiKey` / token / authorization 片段不会原样写进 session 文件；同时 session 文档采用 revision 冲突保护，避免两个 CLI 进程静默覆盖同一份文件。
 
-## 一份更完整的样例
+不过它仍然不是“加密保险箱”或“企业级会话数据库”：更严格的权限治理、多租户、远程恢复和更完整的 retention / archive 策略还在后续阶段。
 
-下面这份样例同时展示：
+当前 FileSessionStore 更适合单机开发，不等同于企业级多 Session 服务或长期 Memory 数据库。
 
-- 新版命名模型
-- provider 默认参数
-- alias
-- custom provider 模块
+你可以把它理解成“已经有正式的本地 Session 文档和恢复链”，但还不是“完整的会话平台或控制平面”。路线图后续单独把更强的 SessionStore、长期 MemoryStore 和企业控制平面继续拆开，就是为了避免这些层级再次混在一起。
 
-```json
-{
-  "name": "mingxu",
-  "systemPrompt": "You are a helpful agent.",
-  "defaultModel": "assistant",
-  "models": {
-    "assistant": {
-      "provider": "work-openai",
-      "model": "gpt-4.1"
-    },
-    "fallback": {
-      "provider": "anthropic",
-      "model": "claude-sonnet-5",
-      "apiKey": "anthropic-key"
-    },
-    "gateway-model": {
-      "provider": "gateway",
-      "model": "internal-chat"
-    }
-  },
-  "providers": {
-    "work-openai": "openai",
-    "openai": {
-      "apiKey": "openai-key",
-      "baseUrl": "https://api.openai.com/v1/chat/completions"
-    }
-  },
-  "customProviders": {
-    "module": "./providers/register-gateway.mjs",
-    "gateway": {
-      "module": "./providers/register-gateway.mjs",
-      "baseUrl": "https://gateway.example.com/v1/chat/completions",
-      "apiKey": "gateway-key"
-    }
-  },
-  "maxIterations": 10,
-  "plugins": []
-}
+## 开发命令
+
+```powershell
+pnpm typecheck
+pnpm test
+pnpm build
+pnpm test:smoke
 ```
 
----
+现有测试已覆盖 Agent Loop、Provider、Provider Registry、配置、CLI、工具注册表、自定义 Provider、基础会话存储，以及打包后 CLI / 公共 API 的 smoke path。
 
-## 运行方式
+## 常见问题
 
-假设你的配置文件叫 `mingxu.config.json`：
+### PowerShell 无法运行 pnpm
 
-```bash
-pnpm build && node dist/cli/entry.js --config mingxu.config.json "Say hello"
+先尝试使用 `.cmd` 入口：
+
+```powershell
+pnpm.cmd --version
 ```
 
-如果你已经全局或本地通过 bin 运行：
+如果希望允许当前用户执行本地签名或远程签名脚本，可以自行评估后运行：
 
-```bash
-mingxu --config mingxu.config.json "Say hello"
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 ```
 
----
+重新打开 PowerShell 后再检查 `pnpm --version`。
 
-## 建议你怎么选写法
+### 找不到 Node 或 pnpm
 
-### 场景 1：只有一个模型
-推荐先用最小新版结构：
+如果刚通过 nvm-windows 切换 Node，关闭并重新打开终端，然后检查：
 
-```json
-{
-  "defaultModel": "primary",
-  "models": {
-    "primary": {
-      "provider": "anthropic",
-      "model": "claude-sonnet-5"
-    }
-  }
-}
+```powershell
+nvm current
+node --version
+pnpm.cmd --version
 ```
 
-### 场景 2：多个模型，共享连接配置
-用：
-- `models`
-- `providers`
+### 找不到配置文件
 
-### 场景 3：给内建 provider 起业务名字
-用：
-- `providers` 里的字符串 alias
+确认当前目录存在 `mingxu.config.json`，或者显式指定：
 
-### 场景 4：你自己写 provider 模块
-用：
-- `customProviders.module`
-- 可选 `customProviders.<name>` 默认值
+```powershell
+node dist/cli/entry.js --config "D:\path\to\mingxu.config.json" "Say hello"
+```
 
----
+### Provider 提示缺少 apiKey
 
-## 当前已知限制
+确认环境变量名称与 Provider 对应，并且在启动 `mingxu` 的同一个终端窗口中设置。
 
-这套结构现在已经可用，但仍有几条明确限制：
+### 插件路径错误或 provider 不存在
 
-- alias **区分大小写**
-- alias 不支持链式映射
-- alias 只能指向已注册的正式 provider
-- 动态模块只支持**本地 ESM 文件**
-- 动态模块必须导出默认或具名 `register` 函数
+可以先检查两件事：
 
-这些是当前版本的明确边界，不是偶然行为。
+1. `plugins` 里的路径是不是当前工作目录下真实存在的 `.js`、`.mjs` 或 `.cjs` 文件。
+2. `models.<name>.provider` 写的是不是内建 provider 名、你配置过的 alias，或者自定义 provider 模块里真正注册出来的名字。
+
+如果 provider 名写错，CLI 会在创建模型时失败；如果插件路径写错，插件加载阶段就会报错。当前版本还没有 `doctor` 命令，所以主要靠配置检查和报错信息定位。

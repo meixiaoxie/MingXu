@@ -32,7 +32,10 @@ export function createReadFileTool(
     name: "readFile",
     description: "Read a UTF-8 text file inside the configured root directory.",
     inputSchema: readFileInputSchema,
-    async execute({ path, encoding = "utf8" }) {
+    kind: "file",
+    policyRootDirectory: rootDirectory,
+    async execute({ path, encoding = "utf8" }, context) {
+      context?.signal?.throwIfAborted();
       const requestedPath = resolve(rootDirectory, path);
       assertPathInsideRoot(rootDirectory, requestedPath, path);
 
@@ -42,6 +45,7 @@ export function createReadFileTool(
         realpath(rootDirectory),
         realpath(requestedPath),
       ]);
+      context?.signal?.throwIfAborted();
       assertPathInsideRoot(realRoot, realFile, path);
 
       const fileStat = await stat(realFile);
@@ -52,6 +56,7 @@ export function createReadFileTool(
         throw new Error(`File exceeds the ${maxBytes}-byte limit: ${path}`);
       }
 
+      context?.signal?.throwIfAborted();
       return readFile(realFile, { encoding });
     },
   });

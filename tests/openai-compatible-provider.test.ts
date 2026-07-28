@@ -172,25 +172,46 @@ describe("OpenAICompatibleProvider", () => {
     await kimi.generate({ modelId: "moonshot-test", messages: [] });
     await glm.generate({ modelId: "glm-test", messages: [] });
 
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.moonshot.test/v1/chat/completions");
-    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+    const firstUrl = fetchMock.mock.calls.at(0)?.at(0);
+    const secondUrl = fetchMock.mock.calls.at(1)?.at(0);
+    expect(firstUrl).toBe("https://api.moonshot.test/v1/chat/completions");
+    expect(secondUrl).toBe(
       "https://open.bigmodel.test/api/paas/v4/chat/completions",
     );
   });
 
-  it("reports non-success HTTP responses without parsing them as model output", async () => {
-    const fetchMock = vi.fn(async () => createResponse({ error: "rate limited" }, 429));
+  it("normalizes refreshed provider roots and can emit debug diagnostics", async () => {
+    const debugSink = { write: vi.fn() };
+    const fetchMock = vi.fn(async () => createResponse({
+      choices: [{ message: { content: "ok" } }],
+    }));
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     const provider = new OpenAICompatibleProvider({
       provider: "deepseek",
       apiKey: "test-key",
-      baseUrl: "https://api.deepseek.test/v1",
+      baseUrl: "https://api.deepseek.com",
+      debug: {
+        enabled: true,
+        log(scope, payload) {
+          debugSink.write(`${scope} ${JSON.stringify(payload)}`);
+        },
+      },
     });
 
-    await expect(provider.generate({ modelId: "deepseek-chat", messages: [] })).rejects.toThrow(
-      "deepseek OpenAI-compatible request failed with status 429",
+    await provider.generate({ modelId: "deepseek-v4-flash", messages: [] });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.deepseek.com/chat/completions",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          authorization: "Bearer test-key",
+        }),
+      }),
     );
+    expect(debugSink.write).toHaveBeenCalledWith(expect.stringContaining("openai-compatible.generate"));
+    expect(debugSink.write).toHaveBeenCalledWith(expect.stringContaining("authorizationPresent"));
+    expect(debugSink.write).toHaveBeenCalledWith(expect.stringContaining("requestBody"));
   });
 
   it("rejects malformed successful responses and invalid tool argument JSON", async () => {

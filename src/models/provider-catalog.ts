@@ -4,7 +4,7 @@ import { CustomProvider } from "./custom-provider.js";
 import { GeminiProvider } from "./gemini-provider.js";
 import { defaultModelCapabilities } from "./model-capabilities.js";
 import { OpenAICompatibleProvider } from "./openai-compatible-provider.js";
-import type { ProviderDefinition, ProviderRegistry } from "./provider-registry.js";
+import type { ProviderCreateOptions, ProviderDefinition, ProviderRegistry } from "./provider-registry.js";
 
 const OPENAI_COMPATIBLE_PROVIDERS = {
   "openai-compatible": {
@@ -16,7 +16,7 @@ const OPENAI_COMPATIBLE_PROVIDERS = {
     apiKeyEnv: "OPENAI_API_KEY",
   },
   deepseek: {
-    baseUrl: "https://api.deepseek.com/v1",
+    baseUrl: "https://api.deepseek.com",
     apiKeyEnv: "DEEPSEEK_API_KEY",
   },
   kimi: {
@@ -24,11 +24,11 @@ const OPENAI_COMPATIBLE_PROVIDERS = {
     apiKeyEnv: "KIMI_API_KEY",
   },
   zhipu: {
-    baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+    baseUrl: "https://open.bigmodel.cn/api/paas/v4/",
     apiKeyEnv: "ZHIPU_API_KEY",
   },
   glm: {
-    baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+    baseUrl: "https://open.bigmodel.cn/api/paas/v4/",
     apiKeyEnv: "GLM_API_KEY",
   },
 } as const;
@@ -79,12 +79,13 @@ function createOpenAICompatibleDefinition(
   return {
     provider,
     capabilities: defaultModelCapabilities,
-    create(config: ModelConfig) {
+    create(config: ModelConfig, options?: ProviderCreateOptions) {
       return new OpenAICompatibleProvider({
         provider,
         apiKey: config.apiKey,
         apiKeyEnv: typeof config.apiKeyEnv === "string" ? config.apiKeyEnv : defaults.apiKeyEnv,
         baseUrl: config.baseUrl ?? defaults.baseUrl,
+        ...(options?.debug !== undefined ? { debug: options.debug } : {}),
       });
     },
   };

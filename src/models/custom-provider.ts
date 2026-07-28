@@ -1,8 +1,9 @@
 import { z } from "zod";
 
+import { normalizeModelError } from "./execution-errors.js";
 import { defaultModelCapabilities } from "./model-capabilities.js";
 import type { ModelRequest, ModelResponse, ModelToolCall } from "./model-protocol.js";
-import type { ModelAdapter } from "./provider-registry.js";
+import type { ModelExecutionOptions, ModelAdapter } from "./provider-registry.js";
 
 const customProviderOptionsSchema = z.object({
   protocol: z.literal("openai-compatible").default("openai-compatible"),
@@ -54,24 +55,38 @@ export class CustomProvider implements ModelAdapter {
     this.#apiKey = parsed.apiKey;
   }
 
-  async generate(request: ModelRequest): Promise<ModelResponse> {
-    const response = await fetch(this.#baseUrl, {
-      method: "POST",
-      // The configured endpoint is the credential boundary. Refusing redirects
-      // prevents an upstream from silently forwarding the optional API key.
-      redirect: "error",
-      headers: {
-        "content-type": "application/json",
-        ...(this.#apiKey ? { authorization: `Bearer ${this.#apiKey}` } : {}),
-      },
-      body: JSON.stringify(buildOpenAICompatibleRequest(request)),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Custom provider request failed with status ${response.status}`);
+  async generate(request: ModelRequest, options: ModelExecutionOptions = {}): Promise<ModelResponse> {
+    let response: Response;
+    try {
+      response = await fetch(this.#baseUrl, {
+        method: "POST",
+        // The configured endpoint is the credential boundary. Refusing redirects
+        // prevents an upstream from silently forwarding the optional API key.
+        redirect: "error",
+        ...(options.signal ? { signal: options.signal } : {}),
+        headers: {
+          "content-type": "application/json",
+          ...(this.#apiKey ? { authorization: `Bearer ${this.#apiKey}` } : {}),
+        },
+        body: JSON.stringify(buildOpenAICompatibleRequest(request)),
+      });
+    } catch (error) {
+      throw normalizeModelError({ provider: this.provider, error });
     }
 
-    return parseOpenAICompatibleResponse(await response.json());
+    if (!response.ok) {
+      throw normalizeModelError({
+        provider: this.provider,
+        error: new Error(`Custom provider request failed with status ${response.status}`),
+        status: response.status,
+      });
+    }
+
+    try {
+      return parseOpenAICompatibleResponse(await response.json());
+    } catch (error) {
+      throw normalizeModelError({ provider: this.provider, error });
+    }
   }
 }
 

@@ -1,13 +1,28 @@
 export { Agent } from "./core/agent.js";
 export { runAgentLoop } from "./core/agent-loop.js";
+export {
+  assertSingleActiveRun,
+  transitionApprovalState,
+  transitionRunState,
+  transitionToolInvocationState,
+  transitionTurnState,
+} from "./core/runtime-state.js";
 export type {
   AgentLoopOptions,
   AgentLoopResult,
+  Approval,
   Message,
   MessageRole,
+  ModelInput,
+  ModelOutput,
+  ModelProvider,
+  Run,
+  RunContext,
   ToolCall,
   ToolDefinition,
+  ToolInvocation,
   ToolResult,
+  Turn,
 } from "./core/types.js";
 export {
   AnthropicProvider,
@@ -54,6 +69,7 @@ export {
   defineTool,
   echoTool,
   readFileTool,
+  ToolExecutor,
   ToolRegistry,
 } from "./tools/index.js";
 export type {
@@ -65,6 +81,24 @@ export type {
 } from "./tools/index.js";
 export { FileSessionStore, InMemoryStore } from "./memory/index.js";
 export type { MemoryStore } from "./memory/index.js";
+export {
+  FileSessionStore as VersionedFileSessionStore,
+  SessionConflictError,
+  SessionRuntime,
+  migrateLegacySessionDocument,
+  sessionMigrationRegistry,
+  SESSION_SCHEMA_VERSION,
+} from "./session/index.js";
+export type {
+  SessionApprovalRecord,
+  SessionDocument,
+  SessionRecord,
+  SessionRunRecord,
+  SessionStore,
+  SessionSummary,
+  SessionToolInvocationRecord,
+  SessionTurnRecord,
+} from "./session/index.js";
 export { definePlugin, PluginLoader } from "./plugins/index.js";
 export type { Plugin, PluginContext } from "./plugins/index.js";
 export {
@@ -81,6 +115,7 @@ export type {
   AgentConfigInput,
   CustomProviderConfig,
   ModelConfig,
+  PluginConfig,
   ProviderConfig,
   ResolvedAgentConfig,
   ResolvedProviderConfig,

@@ -1,5 +1,8 @@
 import type { ModelConfig } from "../config/config-schema.js";
-import type { AgentLoopOptions, Message, ModelInput, ModelOutput, ModelProvider, ToolCall } from "../core/types.js";
+import type { Message, ModelInput, ModelOutput, ModelProvider, ToolCall } from "../core/types.js";
+import type { ProviderDebugLogger } from "../cli/provider-debug.js";
+import type { RuntimeTool } from "../tools/index.js";
+import { zodToJsonSchema } from "../tools/zod-json-schema.js";
 import type { ModelAdapter } from "./provider-registry.js";
 import type { ModelRequest, ModelRequestMessage, ModelResponse, ModelToolCall } from "./model-protocol.js";
 
@@ -12,7 +15,7 @@ export function toModelRequest(input: ModelInput, config: ModelConfig): ModelReq
           tools: input.tools.map((tool) => ({
             name: tool.name,
             description: tool.description,
-            inputSchema: tool.inputSchema,
+            inputSchema: zodToJsonSchema((tool as RuntimeTool).inputSchema),
           })),
         }
       : {}),
@@ -20,22 +23,34 @@ export function toModelRequest(input: ModelInput, config: ModelConfig): ModelReq
   };
 }
 
-export function toModelOutput(response: ModelResponse): ModelOutput {
+export function toModelOutput(response: ModelResponse, providerName?: string): ModelOutput {
   return {
     content: response.text,
     toolCalls: response.toolCalls.map(toToolCall),
     ...(response.stopReason !== undefined ? { stopReason: response.stopReason } : {}),
+    ...(response.usage !== undefined ? { usage: response.usage } : {}),
+    ...(response.refusal !== undefined ? { refusal: response.refusal } : {}),
+    ...(response.errors !== undefined ? { errors: response.errors } : {}),
+    ...(response.rawProviderData !== undefined ? { rawProviderData: response.rawProviderData } : {}),
+    ...(providerName !== undefined ? { providerRequestId: `${providerName}:request` } : {}),
   };
 }
 
 export function createRuntimeModelProvider(
   adapter: ModelAdapter,
   config: ModelConfig,
+  debug?: ProviderDebugLogger,
 ): ModelProvider {
   return {
     async generate(input: ModelInput): Promise<ModelOutput> {
-      const response = await adapter.generate(toModelRequest(input, config));
-      return toModelOutput(response);
+      const request = toModelRequest(input, config);
+      debug?.log("request-builder.model-request", {
+        adapterProvider: adapter.provider,
+        modelConfig: config,
+        request,
+      });
+      const response = await adapter.generate(request);
+      return toModelOutput(response, adapter.provider);
     },
   };
 }
