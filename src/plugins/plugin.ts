@@ -1,12 +1,24 @@
 import type { Tool } from "../core/types.js";
+import type { EventSink } from "../events/event-sink.js";
 
-/** Context passed once when a plugin is initialized. */
+/**
+ * Context passed once when a plugin is initialized.
+ *
+ * v0.1 intentionally keeps this surface small: plugins may only register tools.
+ * The event sink exists for runtime integration, but it is not the main stable
+ * compatibility promise for the plugin API.
+ */
 export interface PluginContext {
   registerTool(tool: Tool): void;
+  unregisterTool?(name: string): boolean;
+  eventSink?: EventSink;
 }
 
 export interface Plugin {
   readonly name: string;
+  kind?: "generic" | "file" | "network" | "command";
+  riskLevel?: "low" | "high";
+  policyRootDirectory?: string;
   setup(context: PluginContext): void | Promise<void>;
 }
 

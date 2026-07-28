@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Fast quality on Node ${{ matrix.node }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - name: Check out repository
+        # actions/checkout v4
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+
+      # Corepack activates the pnpm version declared in package.json, keeping
+      # local development and CI on the same package-manager release.
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Set up pnpm
+        # pnpm/action-setup v4
+        uses: pnpm/action-setup@fe02b2b198060655c91e734aa9d15097341251d0
+        with:
+          run_install: false
+
+      - name: Set up Node.js
+        # actions/setup-node v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      # A frozen lockfile prevents CI from silently resolving dependency
+      # versions that were not reviewed and committed to the repository.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type-check source and tests
+        run: pnpm typecheck
+
+      - name: Run fast tests
+        run: pnpm test
+
+      - name: Build package
+        run: pnpm build
+
+  package-smoke:
+    name: Package smoke on Node 24 / Ubuntu
+    runs-on: ubuntu-latest
+    needs: quality
+
+    steps:
+      - name: Check out repository
+        # actions/checkout v4
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Set up pnpm
+        # pnpm/action-setup v4
+        uses: pnpm/action-setup@fe02b2b198060655c91e734aa9d15097341251d0
+        with:
+          run_install: false
+
+      - name: Set up Node.js
+        # actions/setup-node v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build package
+        run: pnpm build
+
+      - name: Smoke-test CLI and package
+        run: pnpm test:smoke

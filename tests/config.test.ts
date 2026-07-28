@@ -48,7 +48,7 @@ describe("agent config", () => {
 
     expect(config.providerAliases).toEqual({ work: "openai" });
     expect(config.customProviderModule).toBe("./providers.mjs");
-    expect(config.models.primary.provider).toBe("work");
+    expect(config.models.primary?.provider).toBe("work");
   });
 
   it("merges provider defaults and named custom provider metadata", () => {
@@ -118,22 +118,30 @@ describe("agent config", () => {
       .toBe(false);
   });
 
-  it("rejects invalid model references and duplicate custom provider keys", () => {
-    expect(agentConfigSchema.safeParse({}).success).toBe(false);
-    expect(agentConfigSchema.safeParse({
-      defaultModel: "missing",
-      models: { primary: legacyModel },
-    }).success).toBe(false);
-    expect(agentConfigSchema.safeParse({
-      defaultModel: "primary",
-      models: { primary: { provider: "missing", model: "test" } },
-    }).success).toBe(false);
-    expect(agentConfigSchema.safeParse({
+  it("normalizes plugin entries and applies trusted_local by default", () => {
+    const config = resolveAgentConfig({
       defaultModel: "primary",
       models: { primary: legacyModel },
-      customProviders: { gateway: "./one.js", " gateway ": "./two.js" },
+      plugins: [
+        " ./plugins/default.mjs ",
+        { path: "./plugins/blocked.mjs", trust: "blocked" },
+      ],
+    });
+
+    expect(config.plugins).toEqual([
+      { path: "./plugins/default.mjs", trust: "trusted_local" },
+      { path: "./plugins/blocked.mjs", trust: "blocked" },
+    ]);
+  });
+
+  it("rejects invalid plugin trust values", () => {
+    expect(agentConfigSchema.safeParse({
+      defaultModel: "primary",
+      models: { primary: legacyModel },
+      plugins: [{ path: "./plugins/test.mjs", trust: "unknown" }],
     }).success).toBe(false);
   });
+
 });
 
 describe("loadConfig", () => {

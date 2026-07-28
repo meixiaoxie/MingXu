@@ -10,6 +10,7 @@ export type {
   AgentConfigInput,
   CustomProviderConfig,
   ModelConfig,
+  PluginConfig,
   ProviderConfig,
   ResolvedAgentConfig,
   ResolvedProviderConfig,

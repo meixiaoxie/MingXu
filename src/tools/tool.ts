@@ -1,18 +1,21 @@
 import type { ZodType } from "zod";
 
-import type { Tool } from "../core/types.js";
+import type { RunContext, Tool } from "../core/types.js";
 
 /** A validated tool remains compatible with the shared, provider-neutral Tool contract. */
 export interface RuntimeTool<TInput = unknown, TOutput = unknown> extends Tool {
   readonly inputSchema: ZodType<TInput>;
-  execute(input: unknown): Promise<TOutput>;
+  execute(input: unknown, context?: RunContext): Promise<TOutput>;
 }
 
 export interface RuntimeToolDefinition<TInput, TOutput> {
   readonly name: string;
   readonly description: string;
+  readonly kind?: Tool["kind"];
+  readonly riskLevel?: Tool["riskLevel"];
+  readonly policyRootDirectory?: Tool["policyRootDirectory"];
   readonly inputSchema: ZodType<TInput>;
-  execute(input: TInput): TOutput | Promise<TOutput>;
+  execute(input: TInput, context?: RunContext): TOutput | Promise<TOutput>;
 }
 
 /**
@@ -34,10 +37,14 @@ export function defineTool<TInput, TOutput>(
   return {
     name,
     description,
+    ...(definition.kind !== undefined ? { kind: definition.kind } : {}),
+    ...(definition.riskLevel !== undefined ? { riskLevel: definition.riskLevel } : {}),
+    ...(definition.policyRootDirectory !== undefined ? { policyRootDirectory: definition.policyRootDirectory } : {}),
     inputSchema: definition.inputSchema,
-    async execute(input: unknown): Promise<TOutput> {
+    async execute(input: unknown, context?: RunContext): Promise<TOutput> {
       const parsedInput = definition.inputSchema.parse(input);
-      return definition.execute(parsedInput);
+      context?.signal?.throwIfAborted();
+      return definition.execute(parsedInput, context);
     },
   };
 }

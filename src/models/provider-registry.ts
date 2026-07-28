@@ -3,20 +3,32 @@ import type {
   ResolvedAgentConfig,
   ResolvedProviderConfig,
 } from "../config/config-schema.js";
+import type { ProviderDebugLogger } from "../cli/provider-debug.js";
+import type {
+  ModelExecutionError,
+} from "./execution-errors.js";
 import type { ModelCapabilities } from "./model-capabilities.js";
 import type { ModelEvent, ModelRequest, ModelResponse } from "./model-protocol.js";
+
+export interface ModelExecutionOptions {
+  readonly signal?: AbortSignal;
+}
 
 export interface ModelAdapter {
   readonly provider: string;
   readonly capabilities: ModelCapabilities;
-  generate(request: ModelRequest): Promise<ModelResponse>;
+  generate(request: ModelRequest, options?: ModelExecutionOptions): Promise<ModelResponse>;
   stream?(request: ModelRequest): AsyncIterable<ModelEvent> | Promise<AsyncIterable<ModelEvent>>;
+}
+
+export interface ProviderCreateOptions {
+  readonly debug?: ProviderDebugLogger;
 }
 
 export interface ProviderDefinition {
   readonly provider: string;
   readonly capabilities: ModelCapabilities;
-  create(config: ModelConfig): ModelAdapter;
+  create(config: ModelConfig, options?: ProviderCreateOptions): ModelAdapter;
 }
 
 /** Everything the runtime needs after resolving one named model entry. */
@@ -139,23 +151,24 @@ export class ProviderRegistry {
     return [...this.#providers.values()];
   }
 
-  create(config: ModelConfig): ModelAdapter {
+  create(config: ModelConfig, options?: ProviderCreateOptions): ModelAdapter {
     const definition = this.get(config.provider);
     if (!definition) {
       throw new Error(`Unsupported model provider: ${normalizeName(config.provider)}`);
     }
-    return definition.create(config);
+    return definition.create(config, options);
   }
 
   /** Selects the configured model before creating its adapter in one safe step. */
   createFromConfig(
     config: ResolvedAgentConfig,
     modelKey = config.defaultModel,
+    options?: ProviderCreateOptions,
   ): { readonly selection: ProviderSelection; readonly adapter: ModelAdapter } {
     const selection = selectModelProvider(config, modelKey);
     return {
       selection,
-      adapter: this.create(selection.model),
+      adapter: this.create(selection.model, options),
     };
   }
 }

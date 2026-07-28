@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { normalizeModelError } from "./execution-errors.js";
 import { defaultModelCapabilities } from "./model-capabilities.js";
 import {
   parseOpenAICompatibleResponse,
@@ -7,7 +8,8 @@ import {
 } from "./openai-compatible-format.js";
 import { readProviderEnv } from "./provider-env.js";
 import type { ModelRequest, ModelResponse } from "./model-protocol.js";
-import type { ModelAdapter } from "./provider-registry.js";
+import type { ModelExecutionOptions, ModelAdapter } from "./provider-registry.js";
+import type { ProviderDebugLogger } from "../cli/provider-debug.js";
 
 const DEFAULT_OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions";
 
@@ -16,6 +18,7 @@ const optionsSchema = z.object({
   apiKey: z.string().trim().min(1).optional(),
   apiKeyEnv: z.string().trim().min(1).optional(),
   baseUrl: z.string().trim().url().optional(),
+  debug: z.unknown().optional(),
 }).strict();
 
 export interface OpenAICompatibleProviderOptions {
@@ -26,6 +29,7 @@ export interface OpenAICompatibleProviderOptions {
   apiKeyEnv?: string | undefined;
   /** Either an API root ending in /v1 or the complete /chat/completions URL. */
   baseUrl?: string | undefined;
+  debug?: ProviderDebugLogger | undefined;
 }
 
 /**
@@ -38,6 +42,7 @@ export class OpenAICompatibleProvider implements ModelAdapter {
   readonly #apiKey: string | undefined;
   readonly #apiKeyEnv: string;
   readonly #endpoint: string;
+  readonly #debug: ProviderDebugLogger | undefined;
 
   constructor(options: OpenAICompatibleProviderOptions = {}) {
     const parsed = optionsSchema.parse(options);
@@ -47,37 +52,59 @@ export class OpenAICompatibleProvider implements ModelAdapter {
     this.#endpoint = resolveChatCompletionsEndpoint(
       parsed.baseUrl ?? DEFAULT_OPENAI_CHAT_COMPLETIONS_URL,
     );
+    this.#debug = parsed.debug as ProviderDebugLogger | undefined;
   }
 
-  async generate(request: ModelRequest): Promise<ModelResponse> {
+  async generate(request: ModelRequest, options: ModelExecutionOptions = {}): Promise<ModelResponse> {
     if (!this.#apiKey) {
       throw new Error(
         `${this.provider} apiKey is required in config or ${this.#apiKeyEnv}`,
       );
     }
 
-    const response = await fetch(this.#endpoint, {
-      method: "POST",
-      // API keys must not be forwarded if a compatible endpoint redirects elsewhere.
-      redirect: "error",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${this.#apiKey}`,
-      },
-      body: JSON.stringify(toOpenAICompatibleRequest(request)),
+    let response: Response;
+    const requestBody = toOpenAICompatibleRequest(request);
+    this.#debug?.log("openai-compatible.generate", {
+      provider: this.provider,
+      endpoint: this.#endpoint,
+      apiKeyEnv: this.#apiKeyEnv,
+      apiKeyPresent: this.#apiKey !== undefined,
+      authorizationPresent: this.#apiKey !== undefined,
+      authorizationScheme: this.#apiKey !== undefined ? "Bearer" : undefined,
+      requestBody,
     });
+    try {
+      response = await fetch(this.#endpoint, {
+        method: "POST",
+        // API keys must not be forwarded if a compatible endpoint redirects elsewhere.
+        redirect: "error",
+        ...(options.signal ? { signal: options.signal } : {}),
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${this.#apiKey}`,
+        },
+        body: JSON.stringify(requestBody),
+      });
+    } catch (error) {
+      throw normalizeModelError({ provider: this.provider, error });
+    }
 
     if (!response.ok) {
-      throw new Error(
-        `${this.provider} OpenAI-compatible request failed with status ${response.status}`,
-      );
+      throw normalizeModelError({
+        provider: this.provider,
+        error: new Error(`${this.provider} OpenAI-compatible request failed with status ${response.status}`),
+        status: response.status,
+      });
     }
 
     let body: unknown;
     try {
       body = await response.json();
     } catch {
-      throw new Error(`${this.provider} returned an invalid OpenAI-compatible JSON response`);
+      throw normalizeModelError({
+        provider: this.provider,
+        error: new Error(`${this.provider} returned an invalid OpenAI-compatible JSON response`),
+      });
     }
     return parseOpenAICompatibleResponse(body, this.provider);
   }

@@ -14,7 +14,7 @@ export interface ModelCapabilities {
 
 export const defaultModelCapabilities: ModelCapabilities = {
   supportsTools: true,
-  supportsStreaming: true,
+  supportsStreaming: false,
   supportsImages: false,
   supportsStructuredOutput: false,
   supportsRefusal: false,

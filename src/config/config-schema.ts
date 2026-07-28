@@ -1,6 +1,11 @@
 import { z } from "zod";
 
-import { DEFAULT_MAX_ITERATIONS } from "../core/runtime-defaults.js";
+import {
+  DEFAULT_MAX_CONCURRENT_TOOLS,
+  DEFAULT_MAX_ITERATIONS,
+  DEFAULT_MAX_MODEL_REQUESTS,
+  DEFAULT_MAX_TOOL_CALLS,
+} from "../core/runtime-defaults.js";
 
 const identifierSchema = z.string().trim().min(1);
 
@@ -49,6 +54,24 @@ export type ProviderConfig = z.infer<typeof providerConfigSchema>;
 type ProviderInput = z.infer<typeof providerEntrySchema>;
 type CustomProviderInput = z.infer<typeof customProviderConfigSchema>;
 type CustomProvidersInput = z.infer<typeof customProvidersInputSchema>;
+type PluginEntryInput = z.infer<typeof pluginEntrySchema>;
+
+type PluginTrust = "trusted_local" | "blocked";
+
+const pluginTrustSchema = z.enum(["trusted_local", "blocked"]);
+const pluginEntrySchema = z.union([
+  identifierSchema,
+  z.object({
+    path: identifierSchema,
+    trust: pluginTrustSchema.default("trusted_local"),
+  }).strict(),
+]);
+const pluginsInputSchema = z.array(pluginEntrySchema).default([]);
+
+export interface PluginConfig {
+  readonly path: string;
+  readonly trust: PluginTrust;
+}
 
 interface ParsedAgentConfigInput {
   name: string;
@@ -62,8 +85,38 @@ interface ParsedAgentConfigInput {
   customProviderModule?: string | undefined;
   model?: ModelConfig | undefined;
   maxIterations: number;
+  runtime?: {
+    limits?: {
+      maxIterations?: number | undefined;
+      maxModelRequests?: number | undefined;
+      maxToolCalls?: number | undefined;
+      maxDurationMs?: number | undefined;
+      maxConcurrentTools?: number | undefined;
+    } | undefined;
+  } | undefined;
+  audit?: {
+    enabled?: boolean | undefined;
+    file?: string | undefined;
+    maxBytes?: number | undefined;
+    maxFiles?: number | undefined;
+    failClosedForHighRisk?: boolean | undefined;
+  } | undefined;
+  redaction?: {
+    enabled?: boolean | undefined;
+    redactSession?: boolean | undefined;
+    redactErrors?: boolean | undefined;
+  } | undefined;
+  secrets?: {
+    allowEnv?: boolean | undefined;
+  } | undefined;
+  session?: {
+    enabled?: boolean | undefined;
+    dir?: string | undefined;
+    retentionDays?: number | undefined;
+    save?: boolean | undefined;
+  } | undefined;
   sessionFile?: string | undefined;
-  plugins: string[];
+  plugins: PluginEntryInput[];
 }
 
 const agentConfigInputSchema = z.object({
@@ -80,8 +133,38 @@ const agentConfigInputSchema = z.object({
   /** @deprecated Use defaultModel and models instead. */
   model: modelConfigSchema.optional(),
   maxIterations: z.number().int().positive().default(DEFAULT_MAX_ITERATIONS),
+  runtime: z.object({
+    limits: z.object({
+      maxIterations: z.number().int().positive().optional(),
+      maxModelRequests: z.number().int().positive().default(DEFAULT_MAX_MODEL_REQUESTS),
+      maxToolCalls: z.number().int().positive().default(DEFAULT_MAX_TOOL_CALLS),
+      maxDurationMs: z.number().positive().optional(),
+      maxConcurrentTools: z.number().int().positive().default(DEFAULT_MAX_CONCURRENT_TOOLS),
+    }).optional(),
+  }).optional(),
+  audit: z.object({
+    enabled: z.boolean().optional(),
+    file: identifierSchema.optional(),
+    maxBytes: z.number().int().positive().optional(),
+    maxFiles: z.number().int().positive().optional(),
+    failClosedForHighRisk: z.boolean().optional(),
+  }).optional(),
+  redaction: z.object({
+    enabled: z.boolean().optional(),
+    redactSession: z.boolean().optional(),
+    redactErrors: z.boolean().optional(),
+  }).optional(),
+  secrets: z.object({
+    allowEnv: z.boolean().optional(),
+  }).optional(),
+  session: z.object({
+    enabled: z.boolean().optional(),
+    dir: identifierSchema.optional(),
+    retentionDays: z.number().int().positive().optional(),
+    save: z.boolean().optional(),
+  }).optional(),
   sessionFile: identifierSchema.optional(),
-  plugins: z.array(identifierSchema).default([]),
+  plugins: pluginsInputSchema,
 }).strict().superRefine((config, context) => {
   validateConfigReferences(config, context);
 });
@@ -114,8 +197,38 @@ export interface ResolvedAgentConfig {
   /** @deprecated Compatibility alias for models[defaultModel]. */
   readonly model: ModelConfig;
   readonly maxIterations: number;
+  readonly runtime?: {
+    readonly limits?: {
+      readonly maxIterations?: number;
+      readonly maxModelRequests?: number;
+      readonly maxToolCalls?: number;
+      readonly maxDurationMs?: number;
+      readonly maxConcurrentTools?: number;
+    };
+  };
+  readonly audit?: {
+    readonly enabled?: boolean;
+    readonly file?: string;
+    readonly maxBytes?: number;
+    readonly maxFiles?: number;
+    readonly failClosedForHighRisk?: boolean;
+  };
+  readonly redaction?: {
+    readonly enabled?: boolean;
+    readonly redactSession?: boolean;
+    readonly redactErrors?: boolean;
+  };
+  readonly secrets?: {
+    readonly allowEnv?: boolean;
+  };
+  readonly session?: {
+    readonly enabled?: boolean;
+    readonly dir?: string;
+    readonly retentionDays?: number;
+    readonly save?: boolean;
+  };
   readonly sessionFile?: string;
-  readonly plugins: readonly string[];
+  readonly plugins: readonly PluginConfig[];
 }
 
 /** Parses authored configuration and produces one canonical runtime shape. */
@@ -283,9 +396,65 @@ function resolveParsedConfig(config: ParsedAgentConfigInput): ResolvedAgentConfi
     ...(sharedCustomModule !== undefined ? { customProviderModule: sharedCustomModule } : {}),
     resolvedProviders,
     model: models[defaultModel] as ModelConfig,
-    maxIterations: config.maxIterations,
+    maxIterations: config.runtime?.limits?.maxIterations ?? config.maxIterations,
+    ...(config.runtime !== undefined
+      ? {
+          runtime: {
+            ...(config.runtime.limits !== undefined
+              ? {
+                  limits: {
+                    ...(config.runtime.limits.maxIterations !== undefined ? { maxIterations: config.runtime.limits.maxIterations } : {}),
+                    ...(config.runtime.limits.maxModelRequests !== undefined ? { maxModelRequests: config.runtime.limits.maxModelRequests } : {}),
+                    ...(config.runtime.limits.maxToolCalls !== undefined ? { maxToolCalls: config.runtime.limits.maxToolCalls } : {}),
+                    ...(config.runtime.limits.maxDurationMs !== undefined ? { maxDurationMs: config.runtime.limits.maxDurationMs } : {}),
+                    ...(config.runtime.limits.maxConcurrentTools !== undefined ? { maxConcurrentTools: config.runtime.limits.maxConcurrentTools } : {}),
+                  },
+                }
+              : {}),
+          },
+        }
+      : {}),
+    ...(config.audit !== undefined
+      ? {
+          audit: {
+            ...(config.audit.enabled !== undefined ? { enabled: config.audit.enabled } : {}),
+            ...(config.audit.file !== undefined ? { file: config.audit.file } : {}),
+            ...(config.audit.maxBytes !== undefined ? { maxBytes: config.audit.maxBytes } : {}),
+            ...(config.audit.maxFiles !== undefined ? { maxFiles: config.audit.maxFiles } : {}),
+            ...(config.audit.failClosedForHighRisk !== undefined
+              ? { failClosedForHighRisk: config.audit.failClosedForHighRisk }
+              : {}),
+          },
+        }
+      : {}),
+    ...(config.redaction !== undefined
+      ? {
+          redaction: {
+            ...(config.redaction.enabled !== undefined ? { enabled: config.redaction.enabled } : {}),
+            ...(config.redaction.redactSession !== undefined ? { redactSession: config.redaction.redactSession } : {}),
+            ...(config.redaction.redactErrors !== undefined ? { redactErrors: config.redaction.redactErrors } : {}),
+          },
+        }
+      : {}),
+    ...(config.secrets !== undefined
+      ? {
+          secrets: {
+            ...(config.secrets.allowEnv !== undefined ? { allowEnv: config.secrets.allowEnv } : {}),
+          },
+        }
+      : {}),
+    ...(config.session !== undefined
+      ? {
+          session: {
+            ...(config.session.enabled !== undefined ? { enabled: config.session.enabled } : {}),
+            ...(config.session.dir !== undefined ? { dir: config.session.dir } : {}),
+            ...(config.session.retentionDays !== undefined ? { retentionDays: config.session.retentionDays } : {}),
+            ...(config.session.save !== undefined ? { save: config.session.save } : {}),
+          },
+        }
+      : {}),
     ...(config.sessionFile !== undefined ? { sessionFile: config.sessionFile } : {}),
-    plugins: config.plugins,
+    plugins: normalizePlugins(config.plugins),
   };
 }
 
@@ -299,6 +468,18 @@ function normalizeRecord<T>(record: Readonly<Record<string, T>>): Record<string,
   return Object.fromEntries(
     Object.entries(record).map(([key, value]) => [key.trim(), value]),
   );
+}
+
+function normalizePlugins(plugins: readonly PluginEntryInput[]): PluginConfig[] {
+  return plugins.map((plugin) => {
+    if (typeof plugin === "string") {
+      return { path: plugin, trust: "trusted_local" };
+    }
+    return {
+      path: plugin.path,
+      trust: plugin.trust,
+    };
+  });
 }
 
 function addIssue(

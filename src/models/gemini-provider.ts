@@ -1,9 +1,11 @@
 import { z } from "zod";
 
+import { withExecutionSignal } from "../core/execution-signal.js";
+import { normalizeModelError } from "./execution-errors.js";
 import { defaultModelCapabilities } from "./model-capabilities.js";
 import { buildGeminiRequest, parseGeminiResponse } from "./gemini-format.js";
 import { readProviderEnv } from "./provider-env.js";
-import type { ModelAdapter } from "./provider-registry.js";
+import type { ModelExecutionOptions, ModelAdapter } from "./provider-registry.js";
 import type { ModelRequest, ModelResponse } from "./model-protocol.js";
 
 const GEMINI_API_ROOT = "https://generativelanguage.googleapis.com/v1beta";
@@ -32,7 +34,7 @@ export class GeminiProvider implements ModelAdapter {
     this.#baseUrl = validateGeminiBaseUrl(parsed.baseUrl ?? GEMINI_API_ROOT);
   }
 
-  async generate(request: ModelRequest): Promise<ModelResponse> {
+  async generate(request: ModelRequest, options: ModelExecutionOptions = {}): Promise<ModelResponse> {
     if (!this.#apiKey) {
       throw new Error("Gemini apiKey is required in config or GEMINI_API_KEY");
     }
@@ -43,21 +45,35 @@ export class GeminiProvider implements ModelAdapter {
     // Keep the key out of the URL and logs by using Google's supported header.
     // Redirects are disabled so credentials cannot be forwarded to another host.
     const endpoint = `${this.#baseUrl}/models/${encodeURIComponent(request.modelId)}:generateContent`;
-    const response = await fetch(endpoint, {
-      method: "POST",
-      redirect: "error",
-      headers: {
-        "content-type": "application/json",
-        "x-goog-api-key": this.#apiKey,
-      },
-      body: JSON.stringify(buildGeminiRequest(request)),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Gemini request failed with status ${response.status}`);
+    let response: Response;
+    try {
+      response = await fetch(endpoint, {
+        method: "POST",
+        redirect: "error",
+        ...(options.signal ? { signal: options.signal } : {}),
+        headers: {
+          "content-type": "application/json",
+          "x-goog-api-key": this.#apiKey,
+        },
+        body: JSON.stringify(buildGeminiRequest(request)),
+      });
+    } catch (error) {
+      throw normalizeModelError({ provider: this.provider, error });
     }
 
-    return parseGeminiResponse(await response.json());
+    if (!response.ok) {
+      throw normalizeModelError({
+        provider: this.provider,
+        error: new Error(`Gemini request failed with status ${response.status}`),
+        status: response.status,
+      });
+    }
+
+    try {
+      return parseGeminiResponse(await response.json());
+    } catch (error) {
+      throw normalizeModelError({ provider: this.provider, error });
+    }
   }
 }
 
