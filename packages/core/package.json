@@ -1,0 +1,17 @@
+{
+  "name": "@mingxu/core",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "description": "MingXu runtime core package.",
+  "main": "./dist/index.js",
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "SECURITY.md",
+    "THIRD_PARTY_NOTICES.md",
+    "LICENSE",
+    "LICENSES"
+  ]
+}

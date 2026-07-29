@@ -1,5 +1,8 @@
 # mingxu
 
+> Current release: 0.3.0.
+> The interactive CLI now uses a product TUI shell with live conversation, approval overlays, extensions, agents, and context panels.
+
 `mingxu` 是一个最小但可真正跑起来的 TypeScript Agent Runtime。它把模型调用、工具执行、审批、审计、会话持久化和配置发现收敛到一条主链上，目标不是做一个花哨框架，而是让你可以用 CLI 把一个受治理的 Agent 真正跑起来。
 
 完整的运行时设计与阶段规划见：
@@ -7,11 +10,12 @@
 - [docs/agent-runtime-design.md](docs/agent-runtime-design.md)
 - [docs/plans/development-roadmap.md](docs/plans/development-roadmap.md)
 
-当前版本是 `0.2.1`，npm 包仍然是 `private`，请从源码或本地打包安装。
+当前版本是 `0.3.0`，npm 包仍然是 `private`，请从源码或本地打包安装。
 
 ## 现在已经能做什么
 
 - CLI 交互聊天：`mingxu` 或 `mingxu chat`
+- TUI 输入层：`/` 菜单、Tab 补全、方向键选择、`/steer`、`/context`、`/extensions`、`/agents`
 - 单轮执行：`mingxu --prompt "..."` 或直接传入位置参数
 - 会话恢复：`resume`、`--continue`、`sessions`
 - 首次启动配置向导：TTY 下无配置时自动引导初始化
@@ -132,6 +136,14 @@ mingxu --continue
 - `/new`
 - `/clear`
 - `/exit`
+- `/context`
+- `/extensions`
+- `/agents`
+- `/audit`
+- `/trust`
+- `/preset`
+- `/compact`
+- `/steer`
 
 ## 配置发现与信任
 

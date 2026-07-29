@@ -8,6 +8,8 @@ Before `1.0.0`, security fixes are applied on the latest `0.x` release line only
 
 The current `0.x` line runs plugins in the host Node.js process and does not claim strong sandbox isolation. Treat local plugins as trusted code only.
 
+The interactive TUI is a presentation layer only. It does not add sandboxing, privilege separation, or any additional trust boundary beyond the core runtime.
+
 ## Reporting a vulnerability
 
 Please do not open a public issue for undisclosed vulnerabilities.

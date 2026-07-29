@@ -26,6 +26,14 @@ _Released 2026-07-29._
 - Added a current-runtime characterization test to pin the existing CLI/session/public API baseline before the rewrite stages start.
 - Added stage 6 compaction plumbing for long contexts, including automatic summary compression, overflow recovery, and branch-aware context rebuilding.
 
+## 0.3.0
+
+_Released 2026-07-29._
+
+- Added the first real `@mingxu/tui` layer and then completed the local product shell: live conversation rendering, approval overlays, command menu, extensions browsing, subagent tree browsing, and context panels.
+- Exposed more chat entry points in the CLI: `/context`, `/extensions`, `/agents`, `/audit`, `/trust`, `/preset`, `/compact`, and `/steer`.
+- Kept the installable CLI path green across `build`, `test`, `test:smoke`, and packed tarball smoke installs.
+
 ## 0.1.0
 
 - Added named-model CLI selection with `--model`.

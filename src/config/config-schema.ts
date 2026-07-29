@@ -147,6 +147,7 @@ const presetConfigSchema = z.object({
 }).passthrough();
 
 const subagentConfigSchema = z.object({
+  enabled: z.boolean().optional(),
   maxDepth: z.number().int().positive().optional(),
   maxConcurrentSubagents: z.number().int().positive().optional(),
 }).strict();

@@ -31,6 +31,12 @@
 - `doctor` 已成为离线优先的配置与路径自检入口，`--online` 才会做连通性检查。
 - `env:NAME` 会先解析成真实环境变量再进入 provider / MCP / runtime 配置。
 
+### 2026-07-29：0.3.0 TUI 产品闭环完成
+
+- CLI 的输入层已经切到新的 `@mingxu/tui` editor 和 slash-command menu，并接入了产品级终端布局。
+- `mingxu` 现在能在交互模式下直接看到 live conversation、approval overlay、`/context`、`/extensions`、`/agents`、`/audit`、`/trust`、`/preset`、`/compact` 和 `/steer` 等入口。
+- 扩展中心、Subagent 任务树、上下文检查器和审批弹窗已经接到 CLI 视图层；后续如果继续扩展，会优先围绕更多插件展示和更细的交互细节推进。
+
 ### 2026-07-29：阶段 8 完成
 
 - MCP 支持 stdio 与 Streamable HTTP。
@@ -78,4 +84,3 @@
 
 - 如果阶段目标发生变化，先更新 ADR 或执行计划，再改这里。
 - 如果某个阶段出现回退，也只在这里记录真实状态，不在 README 里“假装已经完成”。
-

@@ -19,6 +19,40 @@ export interface SubagentRuntimeOptions {
   readonly maxConcurrentSubagents?: number;
 }
 
+export type SubagentRunState = "pending" | "running" | "completed" | "failed" | "cancelled";
+
+export interface SubagentRunNode {
+  readonly id: string;
+  readonly sessionId: string;
+  readonly prompt: string;
+  readonly presetName: string;
+  readonly depth: number;
+  readonly state: SubagentRunState;
+  readonly startedAt: string;
+  readonly endedAt?: string;
+  readonly parentSessionId?: string;
+  readonly parentRunId?: string;
+  readonly terminationReason?: AgentLoopResult["terminationReason"];
+  readonly usage?: AgentLoopResult["usage"];
+  readonly content?: string;
+  readonly error?: string;
+  readonly children: readonly string[];
+}
+
+export interface SubagentTreeNode {
+  readonly id: string;
+  readonly label: string;
+  readonly state: SubagentRunState;
+  readonly depth: number;
+  readonly children: readonly SubagentTreeNode[];
+}
+
+export interface SubagentSnapshot {
+  readonly activeCount: number;
+  readonly nodes: readonly SubagentRunNode[];
+  readonly tree: readonly SubagentTreeNode[];
+}
+
 export interface CreateSubagentSessionRequest {
   readonly preset: AgentPresetV1;
   readonly sessionId: string;
@@ -36,6 +70,7 @@ export class SubagentManager {
   readonly #deps: SubagentDependencies;
   readonly #runtime: SubagentRuntimeOptions;
   readonly #active = new Set<string>();
+  readonly #nodes = new Map<string, SubagentRunNode>();
 
   constructor(deps: SubagentDependencies, runtime: SubagentRuntimeOptions = {}) {
     this.#deps = deps;
@@ -44,6 +79,28 @@ export class SubagentManager {
 
   get activeCount(): number {
     return this.#active.size;
+  }
+
+  snapshot(): SubagentSnapshot {
+    const nodes = [...this.#nodes.values()].sort((left, right) => left.startedAt.localeCompare(right.startedAt));
+    const byParent = new Map<string, string[]>();
+    const rootIds: string[] = [];
+    for (const node of nodes) {
+      const parentKey = node.parentSessionId ?? node.parentRunId;
+      if (!parentKey || !this.#nodes.has(parentKey)) {
+        rootIds.push(node.sessionId);
+        continue;
+      }
+      const children = byParent.get(parentKey) ?? [];
+      children.push(node.sessionId);
+      byParent.set(parentKey, children);
+    }
+    const tree = rootIds.map((id) => buildTreeNode(id, this.#nodes, byParent));
+    return {
+      activeCount: this.activeCount,
+      nodes,
+      tree,
+    };
   }
 
   async spawn(request: SubagentSpawnRequest): Promise<AgentLoopResult> {
@@ -65,6 +122,20 @@ export class SubagentManager {
 
     const sessionId = request.sessionId ?? `subagent-${randomUUID()}`;
     assertSafeIdentifier(sessionId, "Subagent session ID");
+    const startedAt = new Date().toISOString();
+    this.#nodes.set(sessionId, {
+      id: sessionId,
+      sessionId,
+      prompt: request.prompt,
+      presetName: request.presetName,
+      depth,
+      state: "pending",
+      startedAt,
+      ...(request.parentSessionId !== undefined ? { parentSessionId: request.parentSessionId } : {}),
+      ...(request.parentRunId !== undefined ? { parentRunId: request.parentRunId } : {}),
+      children: [],
+    });
+    this.#setState(sessionId, "running");
 
     this.#active.add(sessionId);
     try {
@@ -75,10 +146,59 @@ export class SubagentManager {
         ...(request.parentSessionId !== undefined ? { parentSessionId: request.parentSessionId } : {}),
         ...(request.parentRunId !== undefined ? { parentRunId: request.parentRunId } : {}),
       });
-      return await session.prompt(request.prompt);
+      const result = await session.prompt(request.prompt);
+      this.#setResult(sessionId, "completed", result);
+      return result;
+    } catch (error) {
+      this.#setError(sessionId, error);
+      throw error;
     } finally {
       this.#active.delete(sessionId);
+      const node = this.#nodes.get(sessionId);
+      if (node && node.state === "running") {
+        this.#setState(sessionId, "cancelled");
+      }
     }
+  }
+
+  #setState(sessionId: string, state: SubagentRunState): void {
+    const node = this.#nodes.get(sessionId);
+    if (!node) {
+      return;
+    }
+    this.#nodes.set(sessionId, {
+      ...node,
+      state,
+      ...(state === "running" ? {} : { endedAt: new Date().toISOString() }),
+    });
+  }
+
+  #setResult(sessionId: string, state: SubagentRunState, result: AgentLoopResult): void {
+    const node = this.#nodes.get(sessionId);
+    if (!node) {
+      return;
+    }
+    this.#nodes.set(sessionId, {
+      ...node,
+      state,
+      endedAt: new Date().toISOString(),
+      terminationReason: result.terminationReason,
+      ...(result.usage !== undefined ? { usage: result.usage } : {}),
+      content: result.content,
+    });
+  }
+
+  #setError(sessionId: string, error: unknown): void {
+    const node = this.#nodes.get(sessionId);
+    if (!node) {
+      return;
+    }
+    this.#nodes.set(sessionId, {
+      ...node,
+      state: "failed",
+      endedAt: new Date().toISOString(),
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 
@@ -91,4 +211,34 @@ export function filterPresetTools<T extends { name: string }>(
   }
   const allowed = new Set(preset.tools);
   return tools.filter((tool) => allowed.has(tool.name));
+}
+
+function buildTreeNode(
+  id: string,
+  nodes: ReadonlyMap<string, SubagentRunNode>,
+  byParent: ReadonlyMap<string, string[]>,
+): SubagentTreeNode {
+  const node = nodes.get(id);
+  if (!node) {
+    return {
+      id,
+      label: id,
+      state: "failed",
+      depth: 0,
+      children: [],
+    };
+  }
+  const children = (byParent.get(id) ?? []).map((childId) => buildTreeNode(childId, nodes, byParent));
+  const status = node.state === "running" ? "running"
+    : node.state === "completed" ? "completed"
+      : node.state === "cancelled" ? "cancelled"
+        : node.state === "pending" ? "pending"
+          : "failed";
+  return {
+    id: node.sessionId,
+    label: `${node.sessionId} • ${node.presetName} • ${node.state}`,
+    state: status,
+    depth: node.depth,
+    children,
+  };
 }

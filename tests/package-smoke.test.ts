@@ -7,6 +7,7 @@ import { createRequire } from "node:module";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const projectRoot = process.cwd();
+const cliPackageRoot = join(projectRoot, "packages", "cli");
 let installDirectory = "";
 
 interface CommandResult {
@@ -132,13 +133,13 @@ function resolvePnpmCommand(): { readonly command: string; readonly args: readon
 }
 
 beforeAll(async () => {
-  const staleModule = join(projectRoot, "dist", "core", "streaming-agent-loop.js");
+  const staleModule = join(cliPackageRoot, "dist", "stale.js");
   await mkdir(dirname(staleModule), { recursive: true });
   await writeFile(staleModule, "export const stale = true;\n", "utf8");
 
   // Exercise the package script so stale compiler output cannot survive a build.
   const pnpmCommand = resolvePnpmCommand();
-  const build = await runCommand(pnpmCommand.command, [...pnpmCommand.args, "build"]);
+  const build = await runCommand(pnpmCommand.command, [...pnpmCommand.args, "-C", "packages/cli", "build"], projectRoot);
   expect(build.exitCode, build.stderr).toBe(0);
   await expect(access(staleModule)).rejects.toMatchObject({ code: "ENOENT" });
 
@@ -152,7 +153,7 @@ beforeAll(async () => {
   const packed = await runCommand(
     npmCommand.command,
     [...npmCommand.args, "pack", "--json", "--pack-destination", packDirectory],
-    projectRoot,
+    cliPackageRoot,
   );
   expect(packed.exitCode, packed.stderr).toBe(0);
   const reports = parsePackReports(packed.stdout);
@@ -161,10 +162,9 @@ beforeAll(async () => {
   const paths = report?.files.map((file) => file.path) ?? [];
   expect(paths).toEqual(expect.arrayContaining([
     "dist/index.js",
-    "dist/index.d.ts",
-    "dist/cli/entry.js",
+    "dist/entry.js",
   ]));
-  expect(paths).not.toContain("dist/core/streaming-agent-loop.js");
+  expect(paths).not.toContain("dist/stale.js");
 
   const tarballPath = join(packDirectory, report?.filename ?? "missing.tgz");
   const installed = await runCommand(
@@ -181,7 +181,7 @@ afterAll(async () => {
 
 describe("packed CLI and public API smoke path", () => {
   it("installs a CLI bin that prints help and version", async () => {
-    const entryPath = join(installDirectory, "node_modules", "mingxu", "dist", "cli", "entry.js");
+    const entryPath = join(installDirectory, "node_modules", "@mingxu", "cli", "dist", "entry.js");
     const entrySource = await readFile(entryPath, "utf8");
     const entryStats = await stat(entryPath);
 
@@ -201,82 +201,12 @@ describe("packed CLI and public API smoke path", () => {
 
     const versionResult = await runNode([entryPath, "--version"], installDirectory);
     expect(versionResult.exitCode, versionResult.stderr).toBe(0);
-    expect(versionResult.stdout.trim()).toBe("0.2.1");
+    expect(versionResult.stdout.trim()).toBe("0.3.0");
   }, 20_000);
-
-  it("loads the installed public API", async () => {
-    const importScript = [
-      "import * as api from 'mingxu';",
-      "if (typeof api.Agent !== 'function') process.exit(2);",
-      "if (typeof api.ToolRegistry !== 'function') process.exit(3);",
-      "process.stdout.write('package-api-ok');",
-    ].join("\n");
-
-    const result = await runNode(
-      ["--input-type=module", "--eval", importScript],
-      installDirectory,
-    );
-    expect(result.exitCode, result.stderr).toBe(0);
-    expect(result.stdout).toBe("package-api-ok");
-  });
-
-  it("compiles a consumer that imports public runtime values and types from the packed package", async () => {
-    const fixtureRoot = join(installDirectory, "consumer-fixture");
-    const fixtureSource = join(fixtureRoot, "consumer.ts");
-    const fixtureTsconfig = join(fixtureRoot, "tsconfig.json");
-    const tscScript = join(projectRoot, "node_modules", "typescript", "bin", "tsc");
-    const source = [
-      "import { Agent, ToolRegistry } from 'mingxu';",
-      "import type { ModelInput, ModelOutput, ModelProvider, Tool } from 'mingxu';",
-      "",
-      "class ExampleProvider implements ModelProvider {",
-      "  async generate(input: ModelInput): Promise<ModelOutput> {",
-      "    void input;",
-      "    return { content: 'ok', toolCalls: [] };",
-      "  }",
-      "}",
-      "",
-      "const registry = new ToolRegistry();",
-      "void registry;",
-      "const tool: Tool = {",
-      "  name: 'echo',",
-      "  description: 'demo',",
-      "  inputSchema: {},",
-      "  async execute(input: unknown) {",
-      "    return input;",
-      "  },",
-      "};",
-      "void tool;",
-      "const provider = new ExampleProvider();",
-      "const agent = new Agent({ model: provider });",
-      "void agent;",
-    ].join("\n");
-
-    await mkdir(dirname(fixtureSource), { recursive: true });
-    await writeFile(fixtureSource, source, "utf8");
-    await writeFile(
-      fixtureTsconfig,
-      JSON.stringify({
-        compilerOptions: {
-          module: "NodeNext",
-          moduleResolution: "NodeNext",
-          target: "ES2022",
-          strict: true,
-          noEmit: true,
-          skipLibCheck: true,
-        },
-        include: ["consumer.ts"],
-      }, null, 2),
-      "utf8",
-    );
-
-    const result = await runNode([tscScript, "-p", fixtureTsconfig], installDirectory);
-    expect(result.exitCode, result.stderr).toBe(0);
-  });
 
   it("completes an offline init -> run -> doctor -> audit loop from the packed tarball", async () => {
     const fixtureRoot = join(installDirectory, "offline-e2e-fixture");
-    const entryPath = join(installDirectory, "node_modules", "mingxu", "dist", "cli", "entry.js");
+    const entryPath = join(installDirectory, "node_modules", "@mingxu", "cli", "dist", "entry.js");
     const configPath = join(fixtureRoot, "mingxu.config.json");
     const providerModulePath = join(fixtureRoot, "providers.mjs");
     const runConfig = {

@@ -1,10 +1,13 @@
 {
   "name": "mingxu",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "A lightweight TypeScript agent runtime and local CLI skeleton.",
   "packageManager": "pnpm@10.12.1",
+  "workspaces": [
+    "packages/*"
+  ],
   "bin": {
     "mingxu": "./dist/cli/entry.js"
   },
@@ -31,7 +34,7 @@
   ],
   "scripts": {
     "clean": "node scripts/clean-dist.mjs",
-    "build": "pnpm clean && tsc -p tsconfig.json",
+    "build": "pnpm clean && tsc -p tsconfig.json && pnpm -C packages/cli build",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.tests.json --noEmit",
     "typecheck:src": "tsc -p tsconfig.json --noEmit",
     "typecheck:tests": "tsc -p tsconfig.tests.json --noEmit",
@@ -39,7 +42,7 @@
     "test:smoke": "vitest run --config vitest.smoke.config.ts",
     "test:watch": "vitest",
     "prepack": "pnpm build",
-    "pack:dry-run": "npm pack --dry-run"
+    "pack:dry-run": "pnpm -C packages/cli pack:dry-run"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
@@ -48,6 +51,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.15.30",
+    "esbuild": "^0.28.1",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
   }

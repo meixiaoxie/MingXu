@@ -1,9 +1,9 @@
+import { clearScreenDown, emitKeypressEvents } from "node:readline";
 import { createInterface } from "node:readline/promises";
-import { emitKeypressEvents, clearScreenDown } from "node:readline";
 
-import stringWidth from "string-width";
-
-import { CHAT_COMMANDS, formatChatHelp, suggestChatCommands } from "./chat-commands.js";
+import { Editor } from "../tui/components.js";
+import { CURSOR_MARKER, type KeyInput } from "../tui/types.js";
+import { formatChatHelp, suggestChatCommands } from "./chat-commands.js";
 
 export interface ChatInputOptions {
   readonly input: NodeJS.ReadStream;
@@ -16,13 +16,11 @@ export class ChatInputController {
   readonly #output: NodeJS.WriteStream;
   readonly #rawModeEnabled: boolean;
   #active = false;
-  #buffer = "";
-  #menuVisible = false;
-  #menuIndex = 0;
   #resolver: ((value: string | null) => void) | undefined;
   #lineInterface: import("node:readline/promises").Interface | undefined;
   #abortCallback: (() => void) | undefined;
   #keypressHandler: ((str: string, key: import("node:readline").Key) => void) | undefined;
+  #editor: Editor | undefined;
 
   constructor(options: ChatInputOptions) {
     this.#input = options.input;
@@ -53,9 +51,14 @@ export class ChatInputController {
     this.#input.setRawMode?.(true);
     this.#input.resume();
     this.#active = true;
-    this.#buffer = "";
-    this.#menuVisible = false;
-    this.#menuIndex = 0;
+    this.#editor = new Editor({
+      prompt,
+      completionProvider: (value) => suggestChatCommands(value).map((command) => ({
+        id: command.name,
+        label: command.usage,
+        description: command.description,
+      })),
+    });
 
     return new Promise((resolve) => {
       this.#resolver = resolve;
@@ -73,92 +76,27 @@ export class ChatInputController {
           return;
         }
 
-        if (key.name === "return" || key.name === "enter") {
-          const trimmed = this.#buffer.trim();
-          if (trimmed === "/") {
-            this.#showHelp(prompt);
+        const action = this.#editor?.handleInput(createKeyInput(str, key));
+
+        if (action?.type === "cancel") {
+          this.#finish(null);
+          return;
+        }
+
+        if (action?.type === "submit") {
+          if (action.value.trim() === "/") {
+            this.#renderHelp();
             return;
           }
-          if (this.#menuVisible && this.#suggestions().length > 0) {
-            const completion = this.#selectedCompletion();
-            if (completion) {
-              this.#buffer = completion;
-              this.#render(prompt);
-              this.#finish(this.#buffer);
-              return;
-            }
-          }
-          this.#finish(this.#buffer);
+          this.#finish(action.value);
           return;
         }
 
-        if (key.name === "backspace") {
-          this.#buffer = this.#buffer.slice(0, -1);
-          this.#menuVisible = this.#buffer.startsWith("/");
-          this.#menuIndex = 0;
-          this.#render(prompt);
-          return;
-        }
-
-        if (key.name === "escape") {
-          if (this.#menuVisible) {
-            this.#menuVisible = false;
-            this.#render(prompt);
-            return;
-          }
-          this.#buffer = "";
-          this.#render(prompt);
-          return;
-        }
-
-        if (key.name === "tab") {
-          const suggestions = this.#suggestions();
-          if (suggestions.length > 0) {
-            this.#menuVisible = true;
-            const selected = suggestions[this.#menuIndex] ?? suggestions[0]!;
-            this.#buffer = selected.usage.split(" ")[0] ?? `/${selected.name}`;
-            if (!this.#buffer.startsWith("/")) {
-              this.#buffer = `/${selected.name}`;
-            }
-            if (!this.#buffer.endsWith(" ")) {
-              this.#buffer += " ";
-            }
-            this.#menuIndex = Math.min(this.#menuIndex, suggestions.length - 1);
-            this.#render(prompt);
-          }
-          return;
-        }
-
-        if (key.name === "up") {
-          const suggestions = this.#suggestions();
-          if (suggestions.length > 0) {
-            this.#menuVisible = true;
-            this.#menuIndex = (this.#menuIndex - 1 + suggestions.length) % suggestions.length;
-            this.#render(prompt);
-          }
-          return;
-        }
-
-        if (key.name === "down") {
-          const suggestions = this.#suggestions();
-          if (suggestions.length > 0) {
-            this.#menuVisible = true;
-            this.#menuIndex = (this.#menuIndex + 1) % suggestions.length;
-            this.#render(prompt);
-          }
-          return;
-        }
-
-        if (str) {
-          this.#buffer += str;
-          this.#menuVisible = this.#buffer.startsWith("/");
-          this.#menuIndex = 0;
-          this.#render(prompt);
-        }
+        this.#render();
       };
 
       this.#input.on("keypress", this.#keypressHandler);
-      this.#render(prompt);
+      this.#render();
     });
   }
 
@@ -168,9 +106,8 @@ export class ChatInputController {
       input: this.#input,
       output: this.#output,
       completer: (line: string) => {
-        const suggestions = this.#suggestionsFor(line);
-        const completions: [string[], string] = [suggestions.map((command) => `/${command.name}`), line];
-        return completions;
+        const suggestions = suggestChatCommands(line);
+        return [suggestions.map((command) => `/${command.name}`), line] as [string[], string];
       },
     });
 
@@ -193,6 +130,7 @@ export class ChatInputController {
       this.#input.setRawMode(false);
     }
     this.#active = false;
+    this.#editor = undefined;
     this.#resolver = undefined;
   }
 
@@ -211,47 +149,36 @@ export class ChatInputController {
     clearScreenDown(this.#output);
   }
 
-  #render(prompt: string): void {
+  #render(): void {
     if (!this.#output.isTTY) {
       return;
     }
-
-    const suggestions = this.#menuVisible ? this.#suggestions() : [];
-    const usageWidth = Math.max(...CHAT_COMMANDS.map((item) => stringWidth(item.usage)), 0);
-    const inlineMenu = suggestions.length > 0
-      ? `  ${suggestions.slice(0, 6).map((command, index) => {
-          const marker = index === this.#menuIndex ? ">" : " ";
-          const paddedUsage = command.usage.padEnd(usageWidth);
-          return `${marker} ${paddedUsage}`;
-        }).join("   ")}`
-      : "";
-
     this.#output.write("\r");
     clearScreenDown(this.#output);
-    this.#output.write(`${prompt}${this.#buffer}${inlineMenu}`);
+    const lines = (this.#editor?.render(this.#output.columns || 80) ?? []).map((line) => line.replace(CURSOR_MARKER, ""));
+    this.#output.write(lines.join("\n"));
   }
 
-  #showHelp(prompt: string): void {
-    this.#menuVisible = false;
-    this.#render(prompt);
+  #renderHelp(): void {
+    this.#render();
     this.#output.write(`\n${formatChatHelp()}\n`);
-    this.#render(prompt);
+    this.#render();
   }
+}
 
-  #suggestions(): readonly typeof CHAT_COMMANDS[number][] {
-    return suggestChatCommands(this.#buffer);
+function createKeyInput(sequence: string, key: import("node:readline").Key): KeyInput {
+  const input: { sequence: string; name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean } = { sequence };
+  if (key.name !== undefined) {
+    input.name = key.name;
   }
-
-  #suggestionsFor(line: string): readonly typeof CHAT_COMMANDS[number][] {
-    return suggestChatCommands(line);
+  if (key.ctrl !== undefined) {
+    input.ctrl = key.ctrl;
   }
-
-  #selectedCompletion(): string | undefined {
-    const suggestions = this.#suggestions();
-    const selected = suggestions[this.#menuIndex];
-    if (!selected) {
-      return undefined;
-    }
-    return `/${selected.name}`;
+  if (key.meta !== undefined) {
+    input.meta = key.meta;
   }
+  if (key.shift !== undefined) {
+    input.shift = key.shift;
+  }
+  return input;
 }

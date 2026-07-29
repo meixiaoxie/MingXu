@@ -45,6 +45,9 @@ import type { AgentLoopResult } from "../core/types.js";
 import { MINGXU_IDENTITY_PROMPT } from "./identity.js";
 import { ChatInputController } from "./chat-input.js";
 import { findChatCommand, formatChatHelp, suggestChatCommands } from "./chat-commands.js";
+import type { CliRuntimeContext, CliRuntimeSnapshot, CliSessionRequest } from "./runtime-types.js";
+import { CliTuiApp } from "./tui-app.js";
+import { ProcessTerminal } from "../tui/terminal.js";
 
 export interface CliDependencies {
   run?: (
@@ -164,6 +167,8 @@ export async function main(
         listSessions,
         stdout,
         stderr,
+        projectTrusted: configDiscovery.projectTrusted,
+        configSources: configDiscovery.sources,
         ...(args.model !== undefined ? { modelKey: args.model } : {}),
         ...(args.prompt !== undefined ? { initialPrompt: args.prompt } : {}),
         ...(args.command === "resume" ? { resumeSessionId: args.commandTarget } : {}),
@@ -207,82 +212,51 @@ async function runChatLoop(options: {
   listSessions: NonNullable<CliDependencies["listSessions"]>;
   stdout: Pick<NodeJS.WriteStream, "write">;
   stderr: Pick<NodeJS.WriteStream, "write">;
+  projectTrusted: boolean;
+  configSources: readonly { kind: "explicit" | "global" | "project"; path: string }[];
   modelKey?: string;
   initialPrompt?: string;
   resumeSessionId?: string;
 }): Promise<{ exitCode: number }> {
   void options.run;
   void options.listSessions;
+  let app: CliTuiApp | undefined;
   const runtime = await createCliRuntimeContext({
     config: options.config,
     configFilePath: options.configFilePath,
     stderr: options.stderr,
-  });
-  const controller = new ChatInputController({
-    input: process.stdin,
-    output: process.stdout,
-    enableRawMode: true,
+    projectTrusted: options.projectTrusted,
+    configSources: options.configSources,
+    approvalHandler: (prompt) => app?.openApproval(prompt),
+    principalId: "local-user",
+    interactive: true,
   });
   let currentModelKey = options.modelKey;
   let currentSessionId = options.resumeSessionId;
-  let currentSession = runtime.createSession({
-    ...(currentModelKey !== undefined ? { modelKey: currentModelKey } : {}),
-    ...(currentSessionId !== undefined ? { sessionId: currentSessionId } : {}),
-  });
-  const pendingInputs: string[] = [];
-  let exitRequested = false;
-
   try {
-    if (options.initialPrompt?.trim()) {
-      pendingInputs.push(options.initialPrompt.trim());
-    }
-
     options.stdout.write("mingxu chat. Type /help for commands.\n");
-    while (!exitRequested) {
-      const inputLine = pendingInputs.shift() ?? await controller.readLine("> ");
-      if (inputLine === null) {
-        break;
-      }
-
-      const trimmed = inputLine.trim();
-      if (!trimmed) {
-        continue;
-      }
-
-      if (trimmed.startsWith("/")) {
-        const handled = await handleChatCommand({
-          runtime,
-          controller,
-          config: options.config,
-          stdout: options.stdout,
-          stderr: options.stderr,
-          ...(currentModelKey !== undefined ? { currentModelKey } : {}),
-          ...(currentSessionId !== undefined ? { currentSessionId } : {}),
-          currentSession,
-          setCurrentModelKey: (value) => { currentModelKey = value; },
-          setCurrentSessionId: (value) => { currentSessionId = value; },
-          setCurrentSession: (value) => { currentSession = value; },
-          command: trimmed,
-        });
-        if (handled.exit) {
-          exitRequested = true;
-        }
-        continue;
-      }
-
-      const result = await runChatPrompt({
-        session: currentSession,
-        prompt: trimmed,
-        stdout: options.stdout,
-        stderr: options.stderr,
-      });
-      if (result.sessionId) {
-        currentSessionId = result.sessionId;
-      }
+    const session = runtime.createSession({
+      ...(currentModelKey !== undefined ? { modelKey: currentModelKey } : {}),
+      ...(currentSessionId !== undefined ? { sessionId: currentSessionId } : {}),
+      interactive: true,
+      approvalHandler: (prompt) => app?.openApproval(prompt),
+    });
+    app = new CliTuiApp({
+      runtime,
+      terminal: new ProcessTerminal(process.stdin, process.stdout),
+      session,
+      ...(currentModelKey !== undefined ? { modelKey: currentModelKey } : {}),
+      ...(currentSessionId !== undefined ? { sessionId: currentSessionId } : {}),
+    });
+    const exitCode = await app.start(options.initialPrompt?.trim());
+    if (app.currentModelKey) {
+      currentModelKey = app.currentModelKey;
     }
-    return { exitCode: 0 };
+    if (app.currentSessionId) {
+      currentSessionId = app.currentSessionId;
+    }
+    return { exitCode };
   } finally {
-    controller.close();
     await runtime.close();
   }
 }
@@ -508,24 +482,16 @@ function createDefaultRunner(
   };
 }
 
-interface CliRuntimeContext {
-  createSession(request?: {
-    readonly modelKey?: string;
-    readonly sessionId?: string;
-    readonly preset?: import("../presets/agent-preset-registry.js").AgentPresetV1;
-  }): AgentSession;
-  listSessions(): Promise<string>;
-  listRecentSessions(limit?: number): Promise<readonly { sessionId: string; state: string; updatedAt: string; lastRunState?: string; title?: string }[]>;
-  close(): Promise<void>;
-  readonly config: ResolvedAgentConfig;
-  readonly configFilePath: string;
-}
-
 async function createCliRuntimeContext(options: {
   readonly config: ResolvedAgentConfig;
   readonly configFilePath: string;
   readonly stderr: Pick<NodeJS.WriteStream, "write">;
   readonly debugProvider?: boolean;
+  readonly projectTrusted?: boolean;
+  readonly configSources?: readonly { kind: "explicit" | "global" | "project"; path: string }[];
+  readonly approvalHandler?: import("../approval/types.js").ApprovalHandler;
+  readonly principalId?: string;
+  readonly interactive?: boolean;
 }): Promise<CliRuntimeContext> {
   const providerDebug = createProviderDebugLogger({
     enabled: options.debugProvider || process.env.MINGXU_DEBUG_PROVIDER === "1",
@@ -600,6 +566,7 @@ async function createCliRuntimeContext(options: {
       return runtimeContext.createSession({
         sessionId: childSessionId,
         preset,
+        interactive: true,
         ...(preset.modelKey !== undefined ? { modelKey: preset.modelKey } : {}),
       });
     },
@@ -612,11 +579,7 @@ async function createCliRuntimeContext(options: {
     }));
   }
 
-  const createSession = (request: {
-    readonly modelKey?: string;
-    readonly sessionId?: string;
-    readonly preset?: import("../presets/agent-preset-registry.js").AgentPresetV1;
-  } = {}): AgentSession => {
+  const createSession = (request: CliSessionRequest = {}): AgentSession => {
     const preset = request.preset ?? selectedDefaultPreset;
     const modelKey = request.modelKey ?? preset?.modelKey ?? options.config.defaultModel;
     const { selection, adapter } = providerRegistry.createFromConfig(options.config, modelKey, {
@@ -655,6 +618,15 @@ async function createCliRuntimeContext(options: {
       maxIterations: preset?.maxIterations ?? options.config.maxIterations,
       ...(sessionStore !== undefined ? { sessionStore } : {}),
       ...(request.sessionId !== undefined ? { sessionId: request.sessionId } : {}),
+      ...(request.approvalHandler !== undefined || options.approvalHandler !== undefined
+        ? { approvalHandler: request.approvalHandler ?? options.approvalHandler }
+        : {}),
+      ...(request.principalId !== undefined || options.principalId !== undefined
+        ? { principalId: request.principalId ?? options.principalId }
+        : {}),
+      ...(request.interactive !== undefined || options.interactive !== undefined
+        ? { interactive: request.interactive ?? options.interactive }
+        : {}),
       memoryManager,
       eventSink,
       audit: {
@@ -666,9 +638,7 @@ async function createCliRuntimeContext(options: {
     });
   };
 
-  runtimeContext = {
-    config: options.config,
-    configFilePath: options.configFilePath,
+  const resolvedRuntimeContext: CliRuntimeContext = {
     createSession,
     listSessions: async () => {
       if (!sessionStore) {
@@ -688,6 +658,42 @@ async function createCliRuntimeContext(options: {
       }
       return sessionStore.listRecentSessions(limit);
     },
+    snapshot: async () => ({
+      configFilePath: options.configFilePath,
+      projectTrusted: options.projectTrusted ?? false,
+      configSources: options.configSources ?? [],
+      defaultModel: options.config.defaultModel,
+      models: Object.entries(options.config.models).map(([key, model]) => ({
+        key,
+        provider: model.provider,
+        model: model.model,
+      })),
+      sessions: sessionStore ? await sessionStore.listRecentSessions(10) : [],
+      resources: resourceRegistry.list(),
+      skills: skillRegistry.list(),
+      presets: presetRegistry.list(),
+      mcpServers: mcpManager.listServers().map((name) => ({
+        name,
+        transport: options.config.mcpServers?.[name]?.transport ?? "stdio",
+        connected: mcpManager.listConnectedServers().includes(name),
+      })),
+      subagents: subagentManager.snapshot(),
+      audit: {
+        enabled: options.config.audit?.enabled ?? false,
+        ...(options.config.audit?.file !== undefined ? { file: options.config.audit.file } : {}),
+        healthy: eventSink.isHealthy?.() ?? true,
+        failClosedForHighRisk: options.config.audit?.failClosedForHighRisk ?? false,
+      },
+      instructions: {
+        systemPrompt: options.config.systemPrompt,
+        autoLoadClaudeMd: options.config.instructions?.autoLoadClaudeMd,
+        managed: summarizeInstructionScope(options.config.instructions?.managed),
+        user: summarizeInstructionScope(options.config.instructions?.user),
+        project: summarizeInstructionScope(options.config.instructions?.project),
+        local: summarizeInstructionScope(options.config.instructions?.local),
+        session: summarizeInstructionScope(options.config.instructions?.session),
+      },
+    }),
     close: async () => {
       await mcpManager.close();
       await eventSink.flush?.();
@@ -695,7 +701,8 @@ async function createCliRuntimeContext(options: {
     },
   };
 
-  return runtimeContext;
+  runtimeContext = resolvedRuntimeContext;
+  return resolvedRuntimeContext;
 }
 
 async function handleChatCommand(options: {
@@ -779,6 +786,76 @@ async function handleChatCommand(options: {
           ? activeTools.map((tool) => `${tool.name}\t${tool.description}`).join("\n") + "\n"
           : "No tools are currently registered.\n",
       );
+      return { exit: false };
+    }
+    case "context": {
+      const systemPrompt = options.currentSession.options.systemPrompt?.trim();
+      const summary = [
+        `session: ${options.currentSessionId ?? "new"}`,
+        `model: ${options.currentModelKey ?? options.config.defaultModel}`,
+        `systemPrompt: ${systemPrompt ? `${systemPrompt.length} chars` : "none"}`,
+        `memory: ${Object.keys(options.config.memory ?? {}).length > 0 ? "configured" : "default scopes"}`,
+        `instructions: ${options.config.instructions ? "configured" : "defaults"}`,
+      ];
+      options.stdout.write(`${summary.join("\n")}\n`);
+      return { exit: false };
+    }
+    case "extensions": {
+      const lines = [
+        `plugins: ${(options.config.plugins ?? []).length}`,
+        `mcpServers: ${Object.keys(options.config.mcpServers ?? {}).length}`,
+        `skills: ${options.config.skills?.dirs?.length ?? 0}`,
+        `presets: ${Object.keys(options.config.presets ?? {}).length}`,
+        `defaultPreset: ${options.config.defaultPreset ?? "none"}`,
+      ];
+      options.stdout.write(`${lines.join("\n")}\n`);
+      return { exit: false };
+    }
+    case "agents": {
+      const subagents = options.config.subagents ?? {};
+      options.stdout.write(
+        [
+          `enabled: ${subagents.enabled ?? false}`,
+          `maxDepth: ${subagents.maxDepth ?? 3}`,
+          `maxConcurrentSubagents: ${subagents.maxConcurrentSubagents ?? 4}`,
+        ].join("\n") + "\n",
+      );
+      return { exit: false };
+    }
+    case "audit": {
+      const audit = options.config.audit;
+      options.stdout.write(
+        [
+          `enabled: ${audit?.enabled ?? false}`,
+          `file: ${audit?.file ?? "none"}`,
+          `failClosedForHighRisk: ${audit?.failClosedForHighRisk ?? false}`,
+        ].join("\n") + "\n",
+      );
+      return { exit: false };
+    }
+    case "trust":
+      options.stdout.write("Project trust is handled during config discovery for the current workspace.\n");
+      return { exit: false };
+    case "preset": {
+      const presets = Object.keys(options.config.presets ?? {});
+      options.stdout.write(
+        presets.length > 0
+          ? [`default: ${options.config.defaultPreset ?? "none"}`, ...presets.map((preset, index) => `${index + 1}. ${preset}`)].join("\n") + "\n"
+          : "No presets are configured.\n",
+      );
+      return { exit: false };
+    }
+    case "compact": {
+      options.stdout.write("Conversation compaction is managed automatically by the runtime.\n");
+      return { exit: false };
+    }
+    case "steer": {
+      if (!parsed.args) {
+        options.stdout.write("Usage: /steer [text]\n");
+        return { exit: false };
+      }
+      options.currentSession.steer(parsed.args);
+      options.stdout.write("Queued steering instruction for the next model turn.\n");
       return { exit: false };
     }
     case "session":
@@ -1072,6 +1149,18 @@ function mergeInstructionRootConfig(
       : {}),
   };
   return merged;
+}
+
+function summarizeInstructionScope(scope: { dir?: string | undefined; file?: string | undefined; files?: readonly string[] | undefined } | undefined): string[] | undefined {
+  if (!scope) {
+    return undefined;
+  }
+  const values = [
+    ...(scope.dir ? [scope.dir] : []),
+    ...(scope.file ? [scope.file] : []),
+    ...(scope.files ?? []),
+  ];
+  return values.length > 0 ? values : undefined;
 }
 
 function createConfiguredMemoryManager(

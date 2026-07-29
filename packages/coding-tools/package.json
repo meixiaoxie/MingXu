@@ -1,0 +1,17 @@
+{
+  "name": "@mingxu/coding-tools",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "description": "Official MingXu coding plugin package.",
+  "main": "./dist/index.js",
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "SECURITY.md",
+    "THIRD_PARTY_NOTICES.md",
+    "LICENSE",
+    "LICENSES"
+  ]
+}
