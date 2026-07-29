@@ -1,4 +1,4 @@
-import type { RunContext, ToolInvocation, ToolResult } from "../core/types.js";
+import type { RunContext, RunTerminationReason, ToolInvocation, ToolResult } from "../core/types.js";
 import { withExecutionSignal } from "../core/execution-signal.js";
 import { normalizeToolError } from "../models/execution-errors.js";
 
@@ -9,6 +9,7 @@ import { encodeToolOutput } from "./tool-result-codec.js";
 export interface ToolExecutorResult {
   readonly invocation: ToolInvocation;
   readonly toolResult: ToolResult;
+  readonly terminationReason?: Extract<RunTerminationReason, "aborted" | "tool_timeout">;
 }
 
 export interface ToolExecutorRequest extends ToolExecutionRequest {
@@ -87,6 +88,11 @@ export class ToolExecutor {
           output: normalized.details.message,
           isError: true,
         },
+        ...(normalized.details.code === "timeout"
+          ? { terminationReason: "tool_timeout" as const }
+          : normalized.details.code === "cancelled"
+            ? { terminationReason: "aborted" as const }
+            : {}),
       };
     }
   }

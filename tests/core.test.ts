@@ -463,6 +463,7 @@ describe("Agent core", () => {
     };
 
     const fingerprint = JSON.stringify({
+      principal: { kind: "user", id: "local-user" },
       action: { kind: "tool.call", name: "approved-tool" },
       resource: { kind: "tool", toolName: "approved-tool" },
       normalizedInput: { path: "note.txt" },

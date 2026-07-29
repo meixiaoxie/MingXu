@@ -8,7 +8,6 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const projectRoot = process.cwd();
 let installDirectory = "";
-let smokeSkipReason: string | undefined;
 
 interface CommandResult {
   readonly exitCode: number;
@@ -60,15 +59,29 @@ function runCommand(command: string, args: readonly string[], cwd = projectRoot)
 }
 
 async function resolveNpmCommand(): Promise<{ readonly command: string; readonly args: readonly string[] }> {
+  const bundledNpmCliPath = join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
+  try {
+    await access(bundledNpmCliPath);
+    return { command: process.execPath, args: [bundledNpmCliPath] };
+  } catch {
+    // Fall through to package resolution and platform launchers.
+  }
+
   try {
     const npmCliPath = createRequire(import.meta.url).resolve("npm/bin/npm-cli.js");
     await access(npmCliPath);
     return { command: process.execPath, args: [npmCliPath] };
   } catch {
-    const directFallback = process.platform === "win32" ? "npm.cmd" : "npm";
-    const directProbe = await runCommand(directFallback, ["--version"], projectRoot).catch(() => undefined);
+    const directFallback = process.platform === "win32"
+      ? { command: process.env.ComSpec ?? "cmd.exe", args: ["/d", "/s", "/c", "npm.cmd"] }
+      : { command: "npm", args: [] as string[] };
+    const directProbe = await runCommand(
+      directFallback.command,
+      [...directFallback.args, "--version"],
+      projectRoot,
+    ).catch(() => undefined);
     if (directProbe?.exitCode === 0) {
-      return { command: directFallback, args: [] };
+      return directFallback;
     }
 
     const corepackProbe = await runCommand("corepack", ["npm", "--version"], projectRoot).catch(() => undefined);
@@ -82,36 +95,67 @@ async function resolveNpmCommand(): Promise<{ readonly command: string; readonly
   }
 }
 
+function parsePackReports(stdout: string): Array<{
+  readonly filename: string;
+  readonly files: Array<{ readonly path: string }>;
+}> {
+  for (const match of stdout.matchAll(/^[\[{]/gmu)) {
+    try {
+      const parsed: unknown = JSON.parse(stdout.slice(match.index));
+      const candidates = Array.isArray(parsed)
+        ? parsed
+        : parsed && typeof parsed === "object"
+          ? Object.values(parsed)
+          : [];
+      const reports = candidates.filter((candidate): candidate is {
+        readonly filename: string;
+        readonly files: Array<{ readonly path: string }>;
+      } => Boolean(
+        candidate
+        && typeof candidate === "object"
+        && "filename" in candidate
+        && "files" in candidate
+        && Array.isArray(candidate.files),
+      ));
+      if (reports.length > 0) return reports;
+    } catch {
+      // Continue until a complete trailing JSON document is found.
+    }
+  }
+  throw new Error("npm pack did not emit a usable JSON report");
+}
+
+function resolvePnpmCommand(): { readonly command: string; readonly args: readonly string[] } {
+  return process.platform === "win32"
+    ? { command: process.env.ComSpec ?? "cmd.exe", args: ["/d", "/s", "/c", "pnpm.cmd"] }
+    : { command: "pnpm", args: [] };
+}
+
 beforeAll(async () => {
-  // Keep this test runnable by itself: a fresh checkout has no dist directory.
-  const tscScript = join(projectRoot, "node_modules", "typescript", "bin", "tsc");
-  const build = await runNode([tscScript, "-p", "tsconfig.json"]);
+  const staleModule = join(projectRoot, "dist", "core", "streaming-agent-loop.js");
+  await mkdir(dirname(staleModule), { recursive: true });
+  await writeFile(staleModule, "export const stale = true;\n", "utf8");
+
+  // Exercise the package script so stale compiler output cannot survive a build.
+  const pnpmCommand = resolvePnpmCommand();
+  const build = await runCommand(pnpmCommand.command, [...pnpmCommand.args, "build"]);
   expect(build.exitCode, build.stderr).toBe(0);
+  await expect(access(staleModule)).rejects.toMatchObject({ code: "ENOENT" });
 
   installDirectory = await mkdtemp(join(tmpdir(), "mingxu-package-smoke-"));
   const packDirectory = join(installDirectory, "packed");
-  const { mkdir } = await import("node:fs/promises");
   await mkdir(packDirectory);
 
   // Create a real tarball, then install it into an empty project. This catches
   // missing files, broken package metadata, and unusable executable links.
-  const npmCommand = await resolveNpmCommand().catch((error) => {
-    smokeSkipReason = error instanceof Error ? error.message : String(error);
-    return undefined;
-  });
-  if (!npmCommand) {
-    return;
-  }
+  const npmCommand = await resolveNpmCommand();
   const packed = await runCommand(
     npmCommand.command,
     [...npmCommand.args, "pack", "--json", "--pack-destination", packDirectory],
     projectRoot,
   );
   expect(packed.exitCode, packed.stderr).toBe(0);
-  const reports = JSON.parse(packed.stdout) as Array<{
-    readonly filename: string;
-    readonly files: Array<{ readonly path: string }>;
-  }>;
+  const reports = parsePackReports(packed.stdout);
   const report = reports[0];
   expect(report).toBeDefined();
   const paths = report?.files.map((file) => file.path) ?? [];
@@ -120,6 +164,7 @@ beforeAll(async () => {
     "dist/index.d.ts",
     "dist/cli/entry.js",
   ]));
+  expect(paths).not.toContain("dist/core/streaming-agent-loop.js");
 
   const tarballPath = join(packDirectory, report?.filename ?? "missing.tgz");
   const installed = await runCommand(
@@ -135,8 +180,7 @@ afterAll(async () => {
 });
 
 describe("packed CLI and public API smoke path", () => {
-  it("installs a CLI bin that prints help and version", async ({ skip }) => {
-    if (smokeSkipReason) skip(smokeSkipReason);
+  it("installs a CLI bin that prints help and version", async () => {
     const entryPath = join(installDirectory, "node_modules", "mingxu", "dist", "cli", "entry.js");
     const entrySource = await readFile(entryPath, "utf8");
     const entryStats = await stat(entryPath);
@@ -160,8 +204,7 @@ describe("packed CLI and public API smoke path", () => {
     expect(versionResult.stdout.trim()).toBe("0.1.0");
   });
 
-  it("loads the installed public API", async ({ skip }) => {
-    if (smokeSkipReason) skip(smokeSkipReason);
+  it("loads the installed public API", async () => {
     const importScript = [
       "import * as api from 'mingxu';",
       "if (typeof api.Agent !== 'function') process.exit(2);",
@@ -177,8 +220,7 @@ describe("packed CLI and public API smoke path", () => {
     expect(result.stdout).toBe("package-api-ok");
   });
 
-  it("compiles a consumer that imports public runtime values and types from the packed package", async ({ skip }) => {
-    if (smokeSkipReason) skip(smokeSkipReason);
+  it("compiles a consumer that imports public runtime values and types from the packed package", async () => {
     const fixtureRoot = join(installDirectory, "consumer-fixture");
     const fixtureSource = join(fixtureRoot, "consumer.ts");
     const fixtureTsconfig = join(fixtureRoot, "tsconfig.json");
@@ -232,8 +274,7 @@ describe("packed CLI and public API smoke path", () => {
     expect(result.exitCode, result.stderr).toBe(0);
   });
 
-  it("completes an offline init -> run -> doctor -> audit loop from the packed tarball", async ({ skip }) => {
-    if (smokeSkipReason) skip(smokeSkipReason);
+  it("completes an offline init -> run -> doctor -> audit loop from the packed tarball", async () => {
     const fixtureRoot = join(installDirectory, "offline-e2e-fixture");
     const entryPath = join(installDirectory, "node_modules", "mingxu", "dist", "cli", "entry.js");
     const configPath = join(fixtureRoot, "mingxu.config.json");
@@ -282,13 +323,14 @@ describe("packed CLI and public API smoke path", () => {
       "        provider: 'local-test',",
       "        capabilities: this.capabilities,",
       "        async generate(request) {",
-      "          const lastTool = request.messages.findLast((message) => message.role === 'tool');",
-      "          if (lastTool) {",
-      "            return { text: `final:${lastTool.content}`, toolCalls: [] };",
+      "          const lastMessage = request.messages.at(-1);",
+      "          if (lastMessage?.role === 'tool') {",
+      "            return { text: `final:${lastMessage.content}`, toolCalls: [] };",
       "          }",
+      "          const history = request.messages.filter((message) => message.role === 'user').map((message) => message.content).join('|');",
       "          return {",
       "            text: '',",
-      "            toolCalls: [{ id: 'tool-1', name: 'echo', input: { message: 'hello' } }],",
+      "            toolCalls: [{ id: `tool-${request.messages.length}`, name: 'echo', input: { message: history } }],",
       "          };",
       "        },",
       "      };",
@@ -308,7 +350,7 @@ describe("packed CLI and public API smoke path", () => {
 
     const runResult = await runNode([entryPath, "--config", configPath, "Say hello"], fixtureRoot);
     expect(runResult.exitCode, runResult.stderr).toBe(0);
-    expect(runResult.stdout.trim()).toBe('final:{"message":"hello"}');
+    expect(runResult.stdout.trim()).toBe("final:Say hello");
 
     const doctorResult = await runNode([entryPath, "doctor", "--config", configPath], fixtureRoot);
     expect(doctorResult.exitCode, doctorResult.stdout).toBe(0);
@@ -319,10 +361,29 @@ describe("packed CLI and public API smoke path", () => {
     const auditPath = join(fixtureRoot, ".mingxu", "audit", "runtime.jsonl");
     const sessionFiles = await readdir(sessionDirectory);
     expect(sessionFiles.length).toBeGreaterThan(0);
-    const sessionSource = await readFile(join(sessionDirectory, sessionFiles[0] as string), "utf8");
+    const sessionFilename = sessionFiles.find((name) => name.endsWith(".jsonl"));
+    expect(sessionFilename).toBeDefined();
+    const sessionId = sessionFilename!.slice(0, -".jsonl".length);
+    const resumeResult = await runNode([
+      entryPath,
+      "--config",
+      configPath,
+      "resume",
+      sessionId,
+      "--prompt",
+      "Continue work",
+    ], fixtureRoot);
+    expect(resumeResult.exitCode, resumeResult.stderr).toBe(0);
+    expect(resumeResult.stdout.trim()).toBe("final:Say hello|Continue work");
+
+    const sessionSource = await readFile(join(sessionDirectory, sessionFilename!), "utf8");
     expect(sessionSource).toContain("Say hello");
+    expect(sessionSource).toContain("Continue work");
     const auditSource = await readFile(auditPath, "utf8");
     expect(auditSource).toContain("run.start");
     expect(auditSource).toContain("run.end");
+    expect(auditSource).toContain("policy.decision");
+    expect(auditSource).toContain("tool.call.start");
+    expect(auditSource).toContain("tool.call.end");
   });
 });

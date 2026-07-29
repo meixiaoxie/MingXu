@@ -2,7 +2,7 @@ import { AgentSession } from "../core/agent-session.js";
 import type { AgentOptions } from "../core/agent.js";
 import { Agent } from "../core/agent.js";
 import { JsonlSessionStore } from "../session/jsonl-session-store.js";
-import type { JsonlSessionStore as JsonlSessionStoreInterface } from "../session/jsonl-session-types.js";
+import type { SessionStore } from "../session/session-store.js";
 import { FileMemoryStore } from "../memory/file-memory-store.js";
 import type { MemoryManager } from "../memory/memory-manager.js";
 import type { AgentHooks } from "../hooks/hook-types.js";
@@ -31,7 +31,7 @@ export interface AgentHarnessConfig {
 export class AgentHarness {
   readonly #sessionPromise: Promise<AgentSession>;
   #session: AgentSession | undefined;
-  #sessionStore: JsonlSessionStoreInterface | undefined = undefined;
+  #sessionStore: SessionStore | undefined = undefined;
   #memoryManager: MemoryManager | undefined = undefined;
   readonly #config: AgentHarnessConfig;
 
@@ -93,7 +93,7 @@ export class AgentHarness {
     return this.#session.state;
   }
 
-  get sessionStore(): JsonlSessionStoreInterface | undefined {
+  get sessionStore(): SessionStore | undefined {
     return this.#sessionStore;
   }
 

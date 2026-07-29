@@ -1,6 +1,7 @@
-import { readFile, mkdir, readdir, writeFile, unlink } from "node:fs/promises";
+import { readFile, mkdir, readdir, writeFile, unlink, lstat } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { createRuntimeId } from "../core/runtime-id.js";
+import { assertSafeStorageTarget, resolveSafeStoragePath } from "../storage/safe-storage-path.js";
 import type { MemoryEntry, MemoryQuery, MemoryScope } from "./memory-scope.js";
 import type { MemoryManager } from "./memory-manager.js";
 
@@ -68,7 +69,8 @@ export class FileMemoryStore implements MemoryManager {
     if (!dirPath) throw new Error(`Unknown memory scope: ${input.scope}`);
 
     await mkdir(dirPath, { recursive: true });
-    const filePath = join(dirPath, `${input.key}.md`);
+    const filePath = resolveSafeStoragePath(dirPath, input.key, ".md", "Memory key");
+    await assertSafeStorageTarget(dirPath, filePath);
     await writeFile(filePath, input.content, "utf8");
 
     const now = new Date().toISOString();
@@ -122,6 +124,7 @@ export class FileMemoryStore implements MemoryManager {
 
       const filePath = join(dirPath, file);
       try {
+        if ((await lstat(filePath)).isSymbolicLink()) continue;
         const content = await readFile(filePath, "utf8");
         const key = basename(file, ".md");
 
