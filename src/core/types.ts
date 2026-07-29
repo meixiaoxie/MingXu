@@ -11,6 +11,7 @@ import type { CompactionSettings } from "../context/compaction.js";
 import type { TransformContext } from "./context.js";
 import type { StreamFn } from "./stream-types.js";
 import type { AgentEventSink } from "../events/types.js";
+import type { ApprovalHandler } from "../approval/types.js";
 // 从 model-protocol 导入 ModelUsage，避免重复定义
 import type { ModelUsage } from "../models/model-protocol.js";
 
@@ -90,6 +91,18 @@ export type RunTerminationReason =
   | "tool_timeout"
   | "model_error"
   | "aborted";
+
+export interface ToolGovernance {
+  readonly kind: "file" | "command" | "network" | "generic";
+  readonly action?: "read" | "write" | "exec" | "request";
+  readonly rootDirectory?: string;
+  readonly pathField?: string;
+  readonly argvField?: string;
+  readonly cwdField?: string;
+  readonly envFields?: readonly string[];
+  readonly timeoutMsField?: string;
+  readonly urlField?: string;
+}
 
 export interface RunContext {
   runId: string;
@@ -204,6 +217,7 @@ export interface Tool {
   kind?: "generic" | "file" | "network" | "command";
   riskLevel?: "low" | "high";
   policyRootDirectory?: string;
+  governance?: ToolGovernance;
   execute(input: unknown, context?: RunContext): Promise<unknown>;
 }
 
@@ -248,6 +262,7 @@ export interface AgentLoopOptions {
   };
   policy?: PolicyEngine;
   approvalStore?: ApprovalStore;
+  approvalHandler?: ApprovalHandler;
   interactive?: boolean;
   principalId?: string;
   sessionId?: string;

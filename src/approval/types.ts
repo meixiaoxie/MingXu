@@ -1,4 +1,5 @@
 export type ApprovalDecision = "allow" | "deny";
+export type ApprovalResponseScope = "once" | "session";
 
 export interface ApprovalRecord {
   id: string;
@@ -18,3 +19,23 @@ export interface ApprovalStore {
   add(record: ApprovalRecord): Promise<void>;
   findMatching(requestFingerprint: string, principalId: string): Promise<ApprovalRecord | undefined>;
 }
+
+export interface ApprovalPrompt {
+  readonly toolName: string;
+  readonly toolCallId: string;
+  readonly principalId: string;
+  readonly requestFingerprint: string;
+  readonly actionKind: string;
+  readonly resourceScope: string;
+  readonly reason: string;
+  readonly input: unknown;
+  readonly policyEffect: "allow" | "deny" | "ask";
+  readonly policyObligations?: readonly unknown[];
+}
+
+export interface ApprovalResponse {
+  readonly decision: ApprovalDecision;
+  readonly scope?: ApprovalResponseScope;
+}
+
+export type ApprovalHandler = (prompt: ApprovalPrompt) => Promise<ApprovalResponse | undefined> | ApprovalResponse | undefined;

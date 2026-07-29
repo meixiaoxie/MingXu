@@ -1,4 +1,4 @@
-export type { Tool } from "../core/types.js";
+export type { Tool, ToolGovernance } from "../core/types.js";
 export { defineTool } from "./tool.js";
 export type { RuntimeTool, RuntimeToolDefinition } from "./tool.js";
 export { ToolExecutor } from "./tool-executor.js";

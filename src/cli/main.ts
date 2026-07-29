@@ -1,5 +1,6 @@
 import { dirname, isAbsolute, resolve } from "node:path";
 import { access, writeFile } from "node:fs/promises";
+import { createInterface } from "node:readline/promises";
 
 import { AgentSession } from "../core/agent-session.js";
 import type { PluginConfig, ResolvedAgentConfig } from "../config/config-schema.js";
@@ -18,6 +19,7 @@ import { createSpawnSubagentTool } from "../tools/builtin/spawn-subagent-tool.js
 import { readFileTool } from "../tools/builtin/read-file-tool.js";
 import { ToolRegistry } from "../tools/tool-registry.js";
 import { parseArgs } from "./parse-args.js";
+import { discoverCliConfig, getGlobalConfigPath, getProjectConfigPath, setProjectTrust } from "./config-discovery.js";
 import { JsonlAuditWriter } from "../audit/jsonl-audit-writer.js";
 import type { EventSink } from "../events/event-sink.js";
 import { NoopEventSink } from "../events/event-sink.js";
@@ -39,6 +41,7 @@ import type { McpServerConfig, McpToolPolicy, McpTransportKind } from "../mcp/mc
 import { SubagentManager, filterPresetTools } from "../subagents/subagent-manager.js";
 import { assertSafeLocalPath } from "../safety/path-safety.js";
 import type { InstructionLoaderOptions, InstructionRootConfig } from "../instructions/instruction-loader.js";
+import type { AgentLoopResult } from "../core/types.js";
 
 export interface CliDependencies {
   run?: (
@@ -46,7 +49,7 @@ export interface CliDependencies {
     prompt?: string,
     modelKey?: string,
     sessionId?: string,
-  ) => Promise<string | void>;
+  ) => Promise<string | void | AgentLoopResult>;
   listSessions?: (config: ResolvedAgentConfig) => Promise<string>;
   doctorProbe?: (config: ResolvedAgentConfig) => Promise<void>;
   stdout?: Pick<NodeJS.WriteStream, "write">;
@@ -55,7 +58,7 @@ export interface CliDependencies {
   debugProvider?: boolean;
 }
 
-const HELP_TEXT = `Usage: mingxu [options] [prompt]\n\nCommands:\n  init                    Create a starter mingxu.config.json in the current directory\n  doctor                  Check config, env, plugins, session, and audit wiring\n  resume [sessionId]      Resume a saved session and continue with a new prompt\n  sessions                List recent sessions\n\nOptions:\n  -c, --config <path>  JSON configuration file\n  -p, --prompt <text>  Prompt to send to the agent\n  -m, --model <name>   Named model from config.models\n      --profile <name> Init profile: minimal or secure-local\n      --online         Allow doctor to perform a live provider connectivity probe\n      --debug-provider Print resolved provider config and request diagnostics to stderr\n  -h, --help           Show this help\n  -v, --version        Show the version\n`;
+const HELP_TEXT = `Usage: mingxu [options] [prompt]\n\nCommands:\n  init                    Create a starter config\n  chat [prompt]           Enter interactive chat mode\n  doctor                  Check config, env, plugins, session, and audit wiring\n  resume [sessionId]      Resume a saved session and continue with a new prompt\n  sessions                List recent sessions\n\nOptions:\n  -c, --config <path>     JSON configuration file\n  -p, --prompt <text>     Prompt to send to the agent\n  -m, --model <name>      Named model from config.models\n      --continue          Resume the latest session in the current workspace\n      --global            Write init output to the global config location\n      --project           Write init output to the project config location\n      --no-global-config  Ignore the global config layer\n      --trust-project     Trust the detected project config layer\n      --no-trust-project  Ignore the detected project config layer\n      --profile <name>    Init profile: minimal or secure-local\n      --online            Allow doctor to perform a live provider connectivity probe\n      --debug-provider    Print resolved provider config and request diagnostics to stderr\n  -h, --help              Show this help\n  -v, --version           Show the version\n`;
 
 type MutableInstructionLoaderOptions = {
   systemPrompt?: string;
@@ -92,18 +95,43 @@ export async function main(
       return 0;
     }
     if (args.command === "init") {
-      const result = await initializeConfig(args.configPath, args.profile ?? "minimal");
+      const initPath = args.initScope === "global" ? getGlobalConfigPath() : args.configPath;
+      const result = await initializeConfig(initPath, args.profile ?? "minimal");
       stdout.write(`${result}\n`);
       return 0;
     }
 
-    const config = await loadConfig(args.configPath);
+    const configDiscovery = args.configProvided
+      ? {
+          config: await loadConfig(args.configPath),
+          sources: [{ kind: "explicit" as const, path: resolve(args.configPath) }],
+          projectTrusted: true,
+        }
+      : await discoverCliConfig({
+          cwd: process.cwd(),
+          noGlobalConfig: args.noGlobalConfig ?? false,
+          trustProject: args.trustProject ?? false,
+          noTrustProject: args.noTrustProject ?? false,
+        });
+
+    if (!configDiscovery) {
+      if (process.stdin.isTTY && process.stdout.isTTY) {
+        await runFirstLaunchWizard(stdout);
+        return 0;
+      }
+      throw new Error(`No configuration found. Run "mingxu init --global"`);
+    }
+
+    const config = configDiscovery.config;
+    const configFilePath = args.configProvided
+      ? args.configPath
+      : (configDiscovery.sources.at(-1)?.path ?? process.cwd());
     const run = dependencies.run ?? createDefaultRunner(
-      args.configPath,
+      configFilePath,
       stderr,
       args.debugProvider ?? dependencies.debugProvider ?? false,
     );
-    const listSessions = dependencies.listSessions ?? createSessionLister(args.configPath);
+    const listSessions = dependencies.listSessions ?? createSessionLister(configFilePath);
 
     if (args.command === "sessions") {
       const result = await listSessions(config);
@@ -114,7 +142,7 @@ export async function main(
     if (args.command === "doctor") {
       const result = await runDoctor({
         config,
-        configPath: args.configPath,
+        configPath: configFilePath,
         online: args.online ?? false,
       }, {
         ...(dependencies.doctorProbe !== undefined ? { fetchProbe: dependencies.doctorProbe } : {}),
@@ -123,19 +151,184 @@ export async function main(
       return result.ok ? 0 : 1;
     }
 
-    const result = await run(
-      config,
-      args.prompt,
-      args.model,
-      args.command === "resume" ? args.commandTarget : undefined,
-    );
-    if (result !== undefined) stdout.write(`${result}\n`);
+    if (args.command === "chat"
+      || (args.command === "resume" && !args.prompt)
+      || (args.command === undefined && !args.prompt && process.stdin.isTTY && process.stdout.isTTY)) {
+      const chatResult = await runChatLoop({
+        config,
+        run,
+        listSessions,
+        stdout,
+        stderr,
+        ...(args.model !== undefined ? { modelKey: args.model } : {}),
+        ...(args.prompt !== undefined ? { initialPrompt: args.prompt } : {}),
+        ...(args.command === "resume" ? { resumeSessionId: args.commandTarget } : {}),
+      });
+      if (chatResult.exitCode !== 0) {
+        return chatResult.exitCode;
+      }
+      return 0;
+    }
+
+    const result = await run(config, args.prompt, args.model, args.command === "resume" ? args.commandTarget : undefined);
+    const normalizedResult = normalizeRunResult(result);
+    if (normalizedResult !== undefined) stdout.write(`${normalizedResult.content}\n`);
     return 0;
   } catch (error) {
     const message = redactText(error instanceof Error ? error.message : String(error));
     stderr.write(`Error: ${message}\n`);
     return 1;
   }
+}
+
+function normalizeRunResult(result: string | void | AgentLoopResult | undefined): AgentLoopResult | undefined {
+  if (result === undefined) {
+    return undefined;
+  }
+  if (typeof result === "string") {
+    return {
+      content: result,
+      messages: [],
+      iterations: 0,
+      terminationReason: "completed",
+    };
+  }
+  return result;
+}
+
+async function runChatLoop(options: {
+  config: ResolvedAgentConfig;
+  run: NonNullable<CliDependencies["run"]>;
+  listSessions: NonNullable<CliDependencies["listSessions"]>;
+  stdout: Pick<NodeJS.WriteStream, "write">;
+  stderr: Pick<NodeJS.WriteStream, "write">;
+  modelKey?: string;
+  initialPrompt?: string;
+  resumeSessionId?: string;
+}): Promise<{ exitCode: number }> {
+  const input = process.stdin;
+  const output = process.stdout;
+  const rl = createInterface({ input, output });
+  let currentSessionId = options.resumeSessionId;
+  let currentModelKey = options.modelKey;
+  const pendingInputs: string[] = [];
+
+  try {
+    if (options.initialPrompt?.trim()) {
+      pendingInputs.push(options.initialPrompt.trim());
+    }
+
+    options.stdout.write("mingxu chat. Type /help for commands.\n");
+    while (true) {
+      const inputLine = pendingInputs.shift() ?? await rl.question("> ");
+      const trimmed = inputLine.trim();
+      if (!trimmed) {
+        continue;
+      }
+      if (trimmed === "/exit" || trimmed === "/quit") {
+        return { exitCode: 0 };
+      }
+      if (trimmed === "/help") {
+        options.stdout.write([
+          "Commands:",
+          "/help",
+          "/exit",
+          "/sessions",
+          "/session",
+          "/new",
+          "/clear",
+          "/model <key>",
+          "/resume <id>",
+        ].join("\n") + "\n");
+        continue;
+      }
+      if (trimmed === "/sessions") {
+        options.stdout.write(`${await options.listSessions(options.config)}\n`);
+        continue;
+      }
+      if (trimmed === "/session") {
+        options.stdout.write(`${currentSessionId ?? "no active session"}\n`);
+        continue;
+      }
+      if (trimmed === "/new") {
+        currentSessionId = undefined;
+        options.stdout.write("Started a new session.\n");
+        continue;
+      }
+      if (trimmed === "/clear") {
+        options.stdout.write("\u001b[2J\u001b[0f");
+        continue;
+      }
+      if (trimmed.startsWith("/model ")) {
+        currentModelKey = trimmed.slice("/model ".length).trim() || undefined;
+        options.stdout.write(`Model set to ${currentModelKey ?? "default"}.\n`);
+        continue;
+      }
+      if (trimmed.startsWith("/resume ")) {
+        currentSessionId = trimmed.slice("/resume ".length).trim() || undefined;
+        options.stdout.write(`Resuming ${currentSessionId ?? "latest"}.\n`);
+        continue;
+      }
+
+      const result = normalizeRunResult(await options.run(
+        options.config,
+        trimmed,
+        currentModelKey,
+        currentSessionId,
+      ));
+      if (result?.content) {
+        options.stdout.write(`${result.content}\n`);
+      }
+      if (result?.sessionId) {
+        currentSessionId = result.sessionId;
+      }
+    }
+  } finally {
+    rl.close();
+  }
+}
+
+async function runFirstLaunchWizard(stdout: Pick<NodeJS.WriteStream, "write">): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const provider = (await rl.question("Provider [anthropic]: ")).trim() || "anthropic";
+    const model = (await rl.question("Model id [claude-sonnet-5]: ")).trim() || "claude-sonnet-5";
+    const apiKeyEnv = (await rl.question(`Environment variable [${defaultApiKeyEnv(provider)}]: `)).trim() || defaultApiKeyEnv(provider);
+    const profile = {
+      name: "mingxu",
+      defaultModel: "primary",
+      models: {
+        primary: {
+          provider,
+          model,
+          apiKey: `env:${apiKeyEnv}`,
+        },
+      },
+      maxIterations: 10,
+      plugins: [],
+      session: {
+        enabled: true,
+        dir: ".mingxu/sessions",
+        save: true,
+      },
+      audit: {
+        enabled: true,
+        file: ".mingxu/audit/runtime.jsonl",
+      },
+    };
+    resolveAgentConfig(profile);
+    const configPath = getGlobalConfigPath();
+    await writeFile(configPath, `${JSON.stringify(profile, null, 2)}\n`, "utf8");
+    stdout.write(`Wrote starter config to ${configPath}\n`);
+    return configPath;
+  } finally {
+    rl.close();
+  }
+}
+
+function defaultApiKeyEnv(provider: string): string {
+  const normalized = provider.replace(/[^a-zA-Z0-9]/gu, "_").toUpperCase();
+  return `${normalized || "PROVIDER"}_API_KEY`;
 }
 
 function createDefaultRunner(
@@ -306,7 +499,7 @@ function createDefaultRunner(
       });
 
       const result = await session.prompt(agentPrompt);
-      return result.content;
+      return result;
     } finally {
       await mcpManager.close();
       await eventSink.flush?.();

@@ -1,19 +1,26 @@
 export interface CliArguments {
   readonly configPath: string;
+  readonly configProvided: boolean;
   readonly model: string | undefined;
   readonly prompt: string | undefined;
   readonly help: boolean;
   readonly version: boolean;
-  readonly command?: "resume" | "sessions" | "init" | "doctor";
+  readonly command?: "resume" | "sessions" | "init" | "doctor" | "chat";
   readonly commandTarget?: string;
   readonly profile?: "minimal" | "secure-local";
+  readonly initScope?: "global" | "project";
   readonly online?: boolean;
   readonly debugProvider?: boolean;
+  readonly continueMode?: boolean;
+  readonly noGlobalConfig?: boolean;
+  readonly trustProject?: boolean;
+  readonly noTrustProject?: boolean;
 }
 
 /** Parses a deliberately small CLI surface without requiring a command-line package. */
 export function parseArgs(argv: readonly string[]): CliArguments {
   let configPath = "mingxu.config.json";
+  let configProvided = false;
   let model: string | undefined;
   let prompt: string | undefined;
   let help = false;
@@ -21,8 +28,13 @@ export function parseArgs(argv: readonly string[]): CliArguments {
   let command: CliArguments["command"];
   let commandTarget: string | undefined;
   let profile: CliArguments["profile"];
+  let initScope: CliArguments["initScope"];
   let online = false;
   let debugProvider = false;
+  let continueMode = false;
+  let noGlobalConfig = false;
+  let trustProject = false;
+  let noTrustProject = false;
   const positionals: string[] = [];
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -40,22 +52,37 @@ export function parseArgs(argv: readonly string[]): CliArguments {
       command = "init";
     } else if (argument === "doctor") {
       command = "doctor";
+    } else if (argument === "chat") {
+      command = "chat";
     } else if (argument === "--profile") {
       const value = readOptionValue(argv, ++index, argument);
       if (value !== "minimal" && value !== "secure-local") {
         throw new Error(`Unsupported profile: ${value}`);
       }
       profile = value;
+    } else if (argument === "--global") {
+      initScope = "global";
+    } else if (argument === "--project") {
+      initScope = "project";
     } else if (argument === "--online") {
       online = true;
     } else if (argument === "--debug-provider") {
       debugProvider = true;
+    } else if (argument === "--continue") {
+      continueMode = true;
+    } else if (argument === "--no-global-config") {
+      noGlobalConfig = true;
+    } else if (argument === "--trust-project") {
+      trustProject = true;
+    } else if (argument === "--no-trust-project") {
+      noTrustProject = true;
     } else if (argument === "--help" || argument === "-h") {
       help = true;
     } else if (argument === "--version" || argument === "-v") {
       version = true;
     } else if (argument === "--config" || argument === "-c") {
       configPath = readOptionValue(argv, ++index, argument);
+      configProvided = true;
     } else if (argument === "--model") {
       model = readOptionValue(argv, ++index, argument);
     } else if (argument === "--prompt" || argument === "-p") {
@@ -79,6 +106,7 @@ export function parseArgs(argv: readonly string[]): CliArguments {
   const positionalPrompt = positionals.length > 0 ? positionals.join(" ") : undefined;
   return {
     configPath,
+    configProvided,
     model,
     prompt: prompt ?? positionalPrompt,
     help,
@@ -86,8 +114,13 @@ export function parseArgs(argv: readonly string[]): CliArguments {
     ...(command !== undefined ? { command } : {}),
     ...(commandTarget !== undefined ? { commandTarget } : {}),
     ...(profile !== undefined ? { profile } : {}),
+    ...(initScope !== undefined ? { initScope } : {}),
     ...(online ? { online } : {}),
     ...(debugProvider ? { debugProvider } : {}),
+    ...(continueMode ? { continueMode } : {}),
+    ...(noGlobalConfig ? { noGlobalConfig } : {}),
+    ...(trustProject ? { trustProject } : {}),
+    ...(noTrustProject ? { noTrustProject } : {}),
   };
 }
 

@@ -31,7 +31,13 @@ export type {
   ToolResult,
   Turn,
   Tool,
+  ToolGovernance,
 } from "./core/types.js";
+export type {
+  ApprovalHandler,
+  ApprovalPrompt,
+  ApprovalResponse,
+} from "./approval/types.js";
 export type {
   AgentMessage,
   AgentMessageRole,
