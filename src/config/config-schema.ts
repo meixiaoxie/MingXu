@@ -49,6 +49,20 @@ const resolvedProviderInputSchema = providerOptionsSchema.extend({
   targetProvider: identifierSchema.optional(),
 });
 
+const pluginPermissionsSchema = z.object({
+  files: z.enum(["none", "read", "write"]).optional(),
+  network: z.enum(["none", "allow"]).optional(),
+  commands: z.enum(["none", "allow"]).optional(),
+  env: z.array(identifierSchema).optional(),
+}).strict();
+
+const pluginManifestSchema = z.object({
+  name: identifierSchema,
+  version: identifierSchema,
+  kind: z.enum(["tool", "provider", "memory", "policy", "audit", "context", "preset"]),
+  permissions: pluginPermissionsSchema.optional(),
+}).strict();
+
 export type ModelConfig = z.infer<typeof modelConfigSchema>;
 export type ProviderConfig = z.infer<typeof providerConfigSchema>;
 type ProviderInput = z.infer<typeof providerEntrySchema>;
@@ -64,6 +78,9 @@ const pluginEntrySchema = z.union([
   z.object({
     path: identifierSchema,
     trust: pluginTrustSchema.default("trusted_local"),
+    kind: z.enum(["tool", "provider", "memory", "policy", "audit", "context", "preset"]).optional(),
+    manifest: identifierSchema.optional(),
+    permissions: pluginPermissionsSchema.optional(),
   }).strict(),
 ]);
 const pluginsInputSchema = z.array(pluginEntrySchema).default([]);
@@ -71,6 +88,9 @@ const pluginsInputSchema = z.array(pluginEntrySchema).default([]);
 export interface PluginConfig {
   readonly path: string;
   readonly trust: PluginTrust;
+  readonly kind?: z.infer<typeof pluginManifestSchema>["kind"];
+  readonly manifest?: string;
+  readonly permissions?: z.infer<typeof pluginPermissionsSchema>;
 }
 
 interface ParsedAgentConfigInput {
@@ -381,7 +401,8 @@ function resolveParsedConfig(config: ParsedAgentConfigInput): ResolvedAgentConfi
       const providerDefaults = providers[model.provider] ?? customProviders[model.provider];
       if (providerDefaults === undefined) return [name, model];
       const { module: _module, ...runtimeDefaults } = providerDefaults;
-      return [name, { ...runtimeDefaults, ...model }];
+      const mergedModel: ModelConfig = { ...runtimeDefaults, ...model };
+      return [name, mergedModel];
     }),
   ) as Record<string, ModelConfig>;
 
@@ -478,6 +499,9 @@ function normalizePlugins(plugins: readonly PluginEntryInput[]): PluginConfig[] 
     return {
       path: plugin.path,
       trust: plugin.trust,
+      ...(plugin.kind !== undefined ? { kind: plugin.kind } : {}),
+      ...(plugin.manifest !== undefined ? { manifest: plugin.manifest } : {}),
+      ...(plugin.permissions !== undefined ? { permissions: plugin.permissions } : {}),
     };
   });
 }

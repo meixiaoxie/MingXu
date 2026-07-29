@@ -4,6 +4,7 @@ import type { ProviderDebugLogger } from "../cli/provider-debug.js";
 import type { RuntimeTool } from "../tools/index.js";
 import { zodToJsonSchema } from "../tools/zod-json-schema.js";
 import type { ModelAdapter } from "./provider-registry.js";
+import { ModelExecutor } from "./model-executor.js";
 import type {
   ModelRequest,
   ModelRequestMessage,
@@ -129,42 +130,17 @@ export function createRuntimeStreamFn(
   config: ModelConfig,
 ): StreamFn {
   return async function* runtimeStreamFn(_model, context, options) {
-    // 先把 runtime context 转成 model request
     const input = await defaultConvertToLlm(context);
-    const request: ModelRequest = {
-      ...toModelRequest(input, config),
-      stream: true,
-      ...(options?.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
-      ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
-      ...(options?.metadata !== undefined ? { metadata: options.metadata } : {}),
-    };
+    const executor = new ModelExecutor(adapter, config);
+    const assistantMessageId = createRuntimeId("assistant");
 
-    // 没有 stream 能力 → 走 generate fallback
-    if (!adapter.stream) {
-      const response = await adapter.generate(request);
-      yield* modelResponseToAssistantEvents(response);
-      return;
-    }
-
-    // 有 stream 能力 → 走真正流式
-    const messageId = createRuntimeId("assistant");
-    let yieldedStart = false;
-
-    const stream = await adapter.stream(request);
-    for await (const event of stream) {
-      const converted = modelEventToAssistantEvent(event, messageId);
-
+    for await (const event of executor.stream({
+      input,
+      context: options?.signal ? { signal: options.signal } : {},
+    })) {
+      const converted = modelEventToAssistantEvent(event, assistantMessageId);
       if (converted === null) continue;
-
-      if (converted.type === "start" && !yieldedStart) {
-        yieldedStart = true;
-        yield converted;
-      } else if (converted.type === "start") {
-        // 已经有了 start 事件就不再重复发
-        continue;
-      } else {
-        yield converted;
-      }
+      yield converted;
     }
   };
 }

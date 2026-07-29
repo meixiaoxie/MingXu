@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { runStreamingAgentLoop, defineTool } from "../src/index.js";
+import { runStreamingAgentLoop } from "../src/core/streaming-agent-loop.js";
+import { defineTool } from "../src/tools/tool.js";
 import { z } from "zod";
-import type { AgentMessage, AssistantStreamEvent } from "../src/index.js";
+import type { AgentMessage } from "../src/core/messages.js";
+import type { AssistantStreamEvent } from "../src/core/stream-types.js";
 
 /** 辅助：创建单轮文本回复的流 */
 function textStream(

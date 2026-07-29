@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createGenerateFallbackStreamFn } from "../src/index.js";
+import { createGenerateFallbackStreamFn } from "../src/core/stream-fn.js";
 
 describe("generate fallback streamFn", () => {
   it("把 generate 输出包装成完整的流式事件序列", async () => {

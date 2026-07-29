@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { defaultConvertToLlm, defaultTransformContext } from "../src/index.js";
-import type { AgentMessage } from "../src/index.js";
+import { defaultConvertToLlm, defaultTransformContext } from "../src/core/context.js";
+import type { AgentMessage } from "../src/core/messages.js";
 
 describe("context transform", () => {
   it("不裁剪消息——原样返回", () => {

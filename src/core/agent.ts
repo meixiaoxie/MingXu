@@ -1,4 +1,5 @@
 import { createGenerateFallbackStreamFn } from "./stream-fn.js";
+import { ControlQueue } from "./control-queue.js";
 import { runStreamingAgentLoop } from "./streaming-agent-loop.js";
 import { createRuntimeId } from "./runtime-id.js";
 import type {
@@ -8,7 +9,7 @@ import type {
   Message,
   ModelProvider,
 } from "./types.js";
-import type { AgentEventListener, AgentEvent } from "./events.js";
+import type { AgentEventListener, AgentEvent } from "../events/types.js";
 import type { StreamFn } from "./stream-types.js";
 import type { AgentHooks } from "../hooks/hook-types.js";
 import type { TransformContext } from "./context.js";
@@ -52,8 +53,8 @@ export interface AgentOptions {
  */
 export class Agent {
   readonly #listeners = new Set<AgentEventListener>();
-  readonly #steeringQueue = new PendingMessageQueue();
-  readonly #followUpQueue = new PendingMessageQueue();
+  readonly #steeringQueue = new ControlQueue<string>();
+  readonly #followUpQueue = new ControlQueue<string>();
   readonly #options: AgentOptions;
   #state: AgentState;
   #abortController: AbortController | undefined;
@@ -352,28 +353,7 @@ export function reduceAgentState(
   }
 }
 
-// ============================================================
-// 消息队列
-// ============================================================
-
-class PendingMessageQueue {
-  readonly #messages: string[] = [];
-
-  enqueue(message: string): void {
-    this.#messages.push(message);
-  }
-
-  drainOne(): string | undefined {
-    return this.#messages.shift();
-  }
-
-  drainAll(): string[] {
-    const all = [...this.#messages];
-    this.#messages.length = 0;
-    return all;
-  }
-}
-
+// PendingMessageQueue was replaced by ControlQueue.
 function createSteeringMessage(content: string): AgentMessage {
   return {
     id: createRuntimeId("steer"),

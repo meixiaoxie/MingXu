@@ -1,4 +1,5 @@
 export { Agent } from "./core/agent.js";
+export { AgentSession } from "./core/agent-session.js";
 export { runAgentLoop } from "./core/agent-loop.js";
 export {
   assertSingleActiveRun,
@@ -11,19 +12,45 @@ export type {
   AgentLoopOptions,
   AgentLoopResult,
   Approval,
+  ArtifactRef,
   Message,
   MessageRole,
   ModelInput,
   ModelOutput,
   ModelProvider,
+  QueueMode,
   Run,
+  RunAccounting,
   RunContext,
+  RunTerminationReason,
   ToolCall,
   ToolDefinition,
+  ToolExecutionContext,
+  ToolExecutionMode,
   ToolInvocation,
   ToolResult,
   Turn,
 } from "./core/types.js";
+export type {
+  AgentMessage,
+  AgentMessageRole,
+  AgentState,
+  AgentTurnState,
+} from "./core/messages.js";
+export type {
+  AgentEvent,
+  AgentEventListener,
+  AgentEventSink,
+  AgentLifecycleEvent,
+  AgentLifecycleEventMap,
+  AgentLifecycleEventType,
+  RuntimeEvent,
+  RuntimeEventContext,
+  RuntimeEventEnvelope,
+  RuntimeEventMap,
+  RuntimeEventSource,
+  RuntimeEventType,
+} from "./events/types.js";
 export {
   AnthropicProvider,
   CustomProvider,
@@ -69,6 +96,7 @@ export {
   createReadFileTool,
   defineTool,
   echoTool,
+  executeToolLifecycle,
   readFileTool,
   ToolExecutor,
   ToolRegistry,
@@ -78,17 +106,14 @@ export type {
   RuntimeTool,
   RuntimeToolDefinition,
   Tool,
-  ToolExecutionRequest,
 } from "./tools/index.js";
-export { FileSessionStore, InMemoryStore } from "./memory/index.js";
-export type { MemoryStore } from "./memory/index.js";
+export type { ToolExecutionRequest } from "./tools/tool-registry.js";
 export {
-  FileSessionStore as VersionedFileSessionStore,
-  SessionConflictError,
+  JsonlSessionStore,
+  SESSION_SCHEMA_VERSION,
   SessionRuntime,
   migrateLegacySessionDocument,
   sessionMigrationRegistry,
-  SESSION_SCHEMA_VERSION,
 } from "./session/index.js";
 export type {
   SessionApprovalRecord,
@@ -121,64 +146,6 @@ export type {
   ResolvedAgentConfig,
   ResolvedProviderConfig,
 } from "./config/index.js";
-
-// ============================================================
-// 新的 runtime 类型和函数导出（Stage B+）
-// ============================================================
-
-export { runStreamingAgentLoop } from "./core/streaming-agent-loop.js";
-
-// core 新类型
-export type {
-  AgentMessage,
-  AgentMessageRole,
-  AgentState,
-  AgentTurnState,
-  QueueMode,
-  StreamingAgentLoopOptions,
-  ToolExecutionContext,
-  ToolExecutionMode,
-} from "./core/types.js";
-
-export type {
-  AgentEvent,
-  AgentEventListener,
-  AgentEventSink,
-} from "./core/events.js";
-
-export type {
-  AgentContext,
-  TokenBudget,
-  TransformContext,
-  ConvertToLlm,
-} from "./core/context.js";
-export {
-  defaultConvertToLlm,
-  defaultTransformContext,
-  SUMMARY_PREFIX,
-  SUMMARY_SUFFIX,
-} from "./core/context.js";
-
-export type {
-  AssistantStreamEvent,
-  StreamFn,
-  StreamOptions,
-} from "./core/stream-types.js";
-
-export { createGenerateFallbackStreamFn } from "./core/stream-fn.js";
-
-// session 类型
-export type {
-  SessionEntry,
-  SessionEntryType,
-} from "./session/session-entry.js";
-
-export type { JsonlSessionStore as JsonlSessionStoreInterface } from "./session/jsonl-session-types.js";
-export { JsonlSessionStore } from "./session/jsonl-session-store.js";
-export { buildSessionTree, collectMessagesFromLeaf } from "./session/session-tree.js";
-export type { SessionNode, SessionTree } from "./session/session-tree.js";
-
-// compaction 类型和函数
 export type {
   CompactionSettings,
   CompactionResult,
@@ -198,17 +165,14 @@ export {
   entriesToMessages,
 } from "./context/index.js";
 export type { SummaryGenerator } from "./context/index.js";
-
-// memory 类型和实现
 export type {
-  MemoryScope,
   MemoryEntry,
+  MemoryManager,
   MemoryQuery,
-} from "./memory/memory-scope.js";
-export type { MemoryManager } from "./memory/memory-manager.js";
-export { FileMemoryStore, createAutoMemoryManager } from "./memory/file-memory-store.js";
-
-// hooks 类型
+  MemoryScope,
+  MemoryStore,
+} from "./memory/index.js";
+export { FileMemoryStore, createAutoMemoryManager } from "./memory/index.js";
 export type {
   AgentHooks,
   BeforeToolCallResult,
@@ -219,8 +183,3 @@ export type {
   PostCompactResult,
   UserPromptSubmitResult,
 } from "./hooks/hook-types.js";
-
-// harness 组合层
-export { AgentHarness } from "./harness/index.js";
-export type { AgentHarnessConfig } from "./harness/index.js";
-export { buildSystemPrompt, loadClaudeMd } from "./harness/index.js";

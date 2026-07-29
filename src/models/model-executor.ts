@@ -1,14 +1,16 @@
-import type { RunContext } from "../core/types.js";
+import type { ExecutionSignalScope } from "../core/execution-signal.js";
 import { withExecutionSignal } from "../core/execution-signal.js";
 import { normalizeModelError } from "./execution-errors.js";
 import { retryProviderRequest } from "./provider-retry.js";
 import type { ModelConfig } from "../config/config-schema.js";
 import { toModelOutput, toModelRequest } from "./request-builder.js";
 import type { ModelAdapter } from "./provider-registry.js";
+import { createModelEndEvent, createModelErrorEvent, createModelStartEvent } from "./model-events.js";
+import type { ModelEvent } from "./model-protocol.js";
 
 export interface ModelExecutorRequest {
   readonly input: import("../core/types.js").ModelInput;
-  readonly context: RunContext;
+  readonly context?: ExecutionSignalScope;
 }
 
 /**
@@ -22,8 +24,43 @@ export class ModelExecutor {
     private readonly config: ModelConfig,
   ) {}
 
+  async *stream(request: ModelExecutorRequest): AsyncIterable<ModelEvent> {
+    const signal = withExecutionSignal(request.context ?? {}, request.context?.timeoutMs);
+    const modelRequest = toModelRequest(request.input, this.config);
+
+    yield createModelStartEvent(modelRequest);
+
+    if (this.adapter.stream) {
+      try {
+        const stream = await this.adapter.stream(modelRequest, signal ? { signal } : {});
+        for await (const event of stream) {
+          if (event.type === "start") continue;
+          yield event;
+        }
+        return;
+      } catch (error) {
+        yield createModelErrorEvent(error);
+        throw normalizeModelError({
+          provider: this.adapter.provider,
+          error,
+        });
+      }
+    }
+
+    const response = await this.generate(request);
+    yield createModelEndEvent({
+      text: response.content,
+      toolCalls: response.toolCalls,
+      ...(response.stopReason !== undefined ? { stopReason: response.stopReason } : {}),
+      ...(response.usage !== undefined ? { usage: response.usage } : {}),
+      ...(response.refusal !== undefined ? { refusal: response.refusal } : {}),
+      ...(response.errors !== undefined ? { errors: response.errors } : {}),
+      ...(response.providerRequestId !== undefined ? { rawProviderData: { providerRequestId: response.providerRequestId } } : {}),
+    });
+  }
+
   async generate(request: ModelExecutorRequest): Promise<import("../core/types.js").ModelOutput> {
-    const signal = withExecutionSignal(request.context, request.context.timeoutMs);
+    const signal = withExecutionSignal(request.context ?? {}, request.context?.timeoutMs);
     const modelRequest = toModelRequest(request.input, this.config);
 
     try {

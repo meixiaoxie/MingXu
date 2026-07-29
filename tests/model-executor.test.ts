@@ -40,16 +40,16 @@ describe("ModelExecutor and request builder", () => {
     });
   });
 
-  it("routes provider calls through ModelExecutor", async () => {
-    const recordedRequests: ModelRequest[] = [];
+  it("streams provider events through ModelExecutor", async () => {
+    const events: string[] = [];
     const adapter: ModelAdapter = {
-      provider: "custom-adapter",
+      provider: "streaming-adapter",
       capabilities: {
         supportsTools: true,
-        supportsStreaming: false,
+        supportsStreaming: true,
         supportsImages: false,
         supportsStructuredOutput: false,
-        supportsRefusal: true,
+        supportsRefusal: false,
         supportsFallback: false,
         supportsEffort: false,
         supportsPromptCaching: false,
@@ -57,17 +57,16 @@ describe("ModelExecutor and request builder", () => {
         maxContext: 1000,
         maxOutput: 100,
       },
-      async generate(request) {
-        recordedRequests.push(request);
-        return {
-          text: "executor answer",
-          toolCalls: [],
-          stopReason: "end_turn",
-          usage: { totalTokens: 12 },
-        };
+      async generate() {
+        return { text: "fallback", toolCalls: [] };
+      },
+      async *stream() {
+        yield { type: "start", request: {} as ModelRequest };
+        yield { type: "delta", text: "streamed" };
+        yield { type: "end", response: { text: "streamed", toolCalls: [] } };
       },
     };
-    const executor = new ModelExecutor(adapter, { provider: "custom-adapter", model: "local-model" });
+    const executor = new ModelExecutor(adapter, { provider: "streaming-adapter", model: "local-model" });
     const context: RunContext = {
       runId: "run-1",
       turnId: "turn-1",
@@ -77,23 +76,10 @@ describe("ModelExecutor and request builder", () => {
       startedAt: "2026-07-28T00:00:00.000Z",
     };
 
-    const output = await executor.generate({
-      input: { messages: [{ role: "user", content: "Hi" }] },
-      context,
-    });
+    for await (const event of executor.stream({ input: { messages: [{ role: "user", content: "Hi" }] }, context })) {
+      events.push(event.type);
+    }
 
-    expect(recordedRequests).toEqual([
-      {
-        modelId: "local-model",
-        messages: [{ role: "user", content: "Hi" }],
-      },
-    ]);
-    expect(output).toEqual({
-      content: "executor answer",
-      toolCalls: [],
-      stopReason: "end_turn",
-      usage: { totalTokens: 12 },
-      providerRequestId: "custom-adapter:request",
-    });
+    expect(events).toEqual(["start", "delta", "end"]);
   });
 });

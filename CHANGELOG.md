@@ -8,6 +8,13 @@ The project follows a practical pre-1.0 compatibility policy:
 - Public changes that affect CLI flags, config schema, emitted session/audit shapes, or exported SDK types must be documented here.
 - When a previously documented public behavior is going away, the deprecation will be called out here before removal.
 
+## Unreleased
+
+- Added the staged runtime-rewrite roadmap and architecture ADRs for the unique runtime chain, append-only session history, permissions and sandbox boundaries, memory/resource loading, and third-party provenance.
+- Added third-party provenance notices and MIT license text for `pi-mono` reuse.
+- Added a current-runtime characterization test to pin the existing CLI/session/public API baseline before the rewrite stages start.
+- Added stage 6 compaction plumbing for long contexts, including automatic summary compression, overflow recovery, and branch-aware context rebuilding.
+
 ## 0.1.0
 
 - Added named-model CLI selection with `--model`.

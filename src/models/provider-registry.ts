@@ -18,7 +18,7 @@ export interface ModelAdapter {
   readonly provider: string;
   readonly capabilities: ModelCapabilities;
   generate(request: ModelRequest, options?: ModelExecutionOptions): Promise<ModelResponse>;
-  stream?(request: ModelRequest): AsyncIterable<ModelEvent> | Promise<AsyncIterable<ModelEvent>>;
+  stream?(request: ModelRequest, options?: ModelExecutionOptions): AsyncIterable<ModelEvent> | Promise<AsyncIterable<ModelEvent>>;
 }
 
 export interface ProviderCreateOptions {

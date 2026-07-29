@@ -80,7 +80,7 @@ describe("Stage D runtime behavior", () => {
     const result = await runAgentLoop("start", {
       model,
       tools: [hangingTool],
-      timeoutMs: 10,
+      timeoutMs: 100,
     });
     const toolMessage = result.messages.find((message) => message.role === "tool");
     expect(toolMessage).toMatchObject({

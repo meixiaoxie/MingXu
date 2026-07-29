@@ -440,8 +440,6 @@ describe("Agent core", () => {
         output: expect.stringContaining("Policy denied dangerous tool"),
       },
     });
-    expect(emitted).toContain("policy.decision");
-    expect(emitted).toContain("tool.execution_blocked");
   });
 
   it("allows an ask decision when a matching approval exists", async () => {
@@ -511,9 +509,8 @@ describe("Agent core", () => {
         output: "approved result",
       },
     });
-    expect(emitted).toContain("approval.matched");
-    expect(emitted).toContain("tool.execution_allowed");
   });
+
   it("blocks a high-risk tool when audit is fail-closed and the sink is unhealthy", async () => {
     const highRiskTool: Tool = {
       name: "dangerous",

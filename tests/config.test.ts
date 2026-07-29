@@ -134,6 +134,28 @@ describe("agent config", () => {
     ]);
   });
 
+  it("preserves plugin manifests, kinds, and permissions", () => {
+    const config = resolveAgentConfig({
+      defaultModel: "primary",
+      models: { primary: legacyModel },
+      plugins: [{
+        path: "./plugins/tool.mjs",
+        trust: "trusted_local",
+        kind: "tool",
+        manifest: "tool-plugin",
+        permissions: { files: "read", env: ["API_KEY"] },
+      }],
+    });
+
+    expect(config.plugins).toEqual([{
+      path: "./plugins/tool.mjs",
+      trust: "trusted_local",
+      kind: "tool",
+      manifest: "tool-plugin",
+      permissions: { files: "read", env: ["API_KEY"] },
+    }]);
+  });
+
   it("rejects invalid plugin trust values", () => {
     expect(agentConfigSchema.safeParse({
       defaultModel: "primary",

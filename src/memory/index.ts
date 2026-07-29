@@ -1,3 +1,4 @@
 export type { MemoryStore } from "./memory-store.js";
-export { InMemoryStore } from "./in-memory-store.js";
-export { FileSessionStore } from "./file-session-store.js";
+export type { MemoryEntry, MemoryQuery, MemoryScope } from "./memory-scope.js";
+export type { MemoryManager } from "./memory-manager.js";
+export { FileMemoryStore, createAutoMemoryManager } from "./file-memory-store.js";

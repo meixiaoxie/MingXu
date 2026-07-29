@@ -3,6 +3,7 @@ import type { AgentLoopOptions, AgentLoopResult, Message, ModelInput, Run, RunCo
 import { assertSingleActiveRun, transitionRunState, transitionTurnState } from "./runtime-state.js";
 import { ToolExecutor } from "../tools/tool-executor.js";
 import { ToolRegistry } from "../tools/tool-registry.js";
+import { executeToolLifecycle } from "../tools/tool-lifecycle.js";
 import {
   checkRuntimeLimit,
   createEmptyAccounting,
@@ -12,13 +13,9 @@ import {
 } from "./runtime-limits.js";
 import { createRuntimeEvent } from "../events/runtime-events.js";
 import { redactText, redactValue } from "../redaction/redactor.js";
-import { normalizeFileAccess } from "../policy/normalizers/file-access-normalizer.js";
-import { normalizeGenericToolCall } from "../policy/normalizers/tool-call-normalizer.js";
-import { applyNonInteractiveAskFallback, createAllowAllRule, createDefaultNonInteractiveAskRule, createReadFileRootRule } from "../policy/policy-defaults.js";
+import { createAllowAllRule, createDefaultNonInteractiveAskRule, createReadFileRootRule } from "../policy/policy-defaults.js";
 import { BasicPolicyEngine } from "../policy/policy-engine.js";
 import { InMemoryApprovalStore } from "../approval/in-memory-approval-store.js";
-import { isApprovalUsable } from "../approval/approval-matcher.js";
-import type { PolicyRequest } from "../policy/types.js";
 import { SessionRuntime } from "../session/session-runtime.js";
 
 const SESSION_MESSAGES_KEY = "messages";
@@ -168,63 +165,6 @@ function createDefaultPolicy(options: AgentLoopOptions): BasicPolicyEngine {
   }
   rules.push(createDefaultNonInteractiveAskRule());
   return new BasicPolicyEngine(rules, "g-stage-v1");
-}
-
-async function buildPolicyRequest(
-  tool: NonNullable<ReturnType<ToolRegistry["get"]>>,
-  call: { id: string; name: string; input: unknown },
-  context: RunContext,
-  options: AgentLoopOptions,
-): Promise<PolicyRequest> {
-  const principalId = options.principalId ?? "local-user";
-  const interactive = options.interactive ?? false;
-  if (tool.kind === "file" && tool.policyRootDirectory && typeof call.input === "object" && call.input !== null && "path" in call.input) {
-    const input = call.input as { path: unknown };
-    if (typeof input.path === "string") {
-      return normalizeFileAccess({
-        toolName: call.name,
-        rootDirectory: tool.policyRootDirectory,
-        path: input.path,
-        mode: "read",
-        principalId,
-        interactive,
-        runId: context.runId,
-        iteration: context.sequence,
-        toolCallId: call.id,
-        ...(context.sessionId !== undefined ? { sessionId: context.sessionId } : {}),
-        ...(context.traceId !== undefined ? { traceId: context.traceId } : {}),
-      });
-    }
-  }
-
-  return normalizeGenericToolCall({
-    toolName: call.name,
-    rawInput: call.input,
-    principalId,
-    interactive,
-    runId: context.runId,
-    iteration: context.sequence,
-    toolCallId: call.id,
-    ...(context.sessionId !== undefined ? { sessionId: context.sessionId } : {}),
-    ...(context.traceId !== undefined ? { traceId: context.traceId } : {}),
-  });
-}
-
-function deniedToolResult(
-  toolCallId: string,
-  toolName: string,
-  message: string,
-) {
-  return {
-    role: "tool" as const,
-    content: message,
-    toolResult: {
-      toolCallId,
-      name: toolName,
-      output: message,
-      isError: true,
-    },
-  };
 }
 
 export async function runAgentLoop(
@@ -378,99 +318,43 @@ export async function runAgentLoop(
             usage,
           };
         }
-        const tool = toolRegistry.get(call.name);
-        if (!tool) {
-          messages.push(deniedToolResult(call.id, call.name, `Unknown tool: ${call.name}`));
-          continue;
-        }
-        if (tool.riskLevel === "high" && options.audit?.failClosedForHighRisk && eventSink?.isHealthy?.() === false) {
-          throw new Error(`High-risk tool requires a healthy audit sink: ${call.name}`);
-        }
-
-        const policyRequest = await buildPolicyRequest(tool, call, context, options);
-        const rawDecision = await policy.evaluate(policyRequest);
-        const decision = applyNonInteractiveAskFallback(policyRequest, rawDecision);
-        await eventSink?.emit(createRuntimeEvent("policy.decision", {
-          toolCallId: call.id,
-          toolName: call.name,
-          effect: decision.effect,
-          reason: decision.reason,
-          action: policyRequest.action,
-          resource: redactValue(policyRequest.resource),
-          matchedRuleIds: decision.matchedRuleIds ?? [],
-        }, createEventContext(context, progress.iterations + progress.modelRequests + progress.toolCalls + 3, "core")));
-
-        if (decision.effect === "ask") {
-          const requestFingerprint = JSON.stringify({
-            action: policyRequest.action,
-            resource: policyRequest.resource,
-            normalizedInput: policyRequest.normalizedInput,
-          });
-          const matched = await approvalStore.findMatching(requestFingerprint);
-          if (!isApprovalUsable(matched)) {
-            await eventSink?.emit(createRuntimeEvent("approval.missing", {
-              toolCallId: call.id,
-              toolName: call.name,
-              reason: decision.reason,
-            }, createEventContext(context, progress.iterations + progress.modelRequests + progress.toolCalls + 4, "core")));
-            messages.push(deniedToolResult(call.id, call.name, `Approval required for tool: ${call.name}`));
-            continue;
-          }
-          await eventSink?.emit(createRuntimeEvent("approval.matched", {
-            toolCallId: call.id,
-            toolName: call.name,
-            approvalId: matched.id,
-            decision: matched.decision,
-          }, createEventContext(context, progress.iterations + progress.modelRequests + progress.toolCalls + 4, "core")));
-          await sessionRuntime?.recordApproval(matched, matched.decision === "allow" ? "approved" : "denied", {
-            runId,
-            turnId: context.turnId,
-          });
-          if (matched.decision === "deny") {
-            messages.push(deniedToolResult(call.id, call.name, `Approval denied for tool: ${call.name}`));
-            continue;
-          }
-        }
-
-        if (decision.effect === "deny") {
-          await eventSink?.emit(createRuntimeEvent("tool.execution_blocked", {
-            toolCallId: call.id,
-            toolName: call.name,
-            reason: decision.reason,
-          }, createEventContext(context, progress.iterations + progress.modelRequests + progress.toolCalls + 4, "tool")));
-          messages.push(deniedToolResult(call.id, call.name, `Tool denied by policy: ${decision.reason}`));
-          continue;
-        }
 
         progress.toolCalls += 1;
-        await eventSink?.emit(createRuntimeEvent("tool.execution_allowed", {
-          toolCallId: call.id,
-          toolName: call.name,
-          obligations: redactValue(decision.obligations ?? []),
-        }, createEventContext(context, progress.iterations + progress.modelRequests + progress.toolCalls + 4, "tool")));
-        await eventSink?.emit(createRuntimeEvent("tool.call.start", {
-          toolCallId: call.id,
-          toolName: call.name,
-          input: redactValue(call.input),
-        }, createEventContext(context, progress.iterations + progress.modelRequests + progress.toolCalls + 5, "tool")));
-        const execution = await toolExecutor.execute({
+        const lifecycle = await executeToolLifecycle({
           name: call.name,
           input: call.input,
+          arguments: call.input,
           toolCallId: call.id,
           context,
-          ...(resolved.toolLimits.timeoutMs !== undefined ? { timeoutMs: resolved.toolLimits.timeoutMs } : {}),
+        }, {
+          registry: toolRegistry,
+          executor: toolExecutor,
+          policy,
+          approvalStore,
+          eventSink,
+          audit: options.audit,
+          principalId: options.principalId,
+          interactive: options.interactive,
         });
-        await eventSink?.emit(createRuntimeEvent(execution.toolResult.isError ? "tool.call.error" : "tool.call.end", {
-          toolCallId: call.id,
-          toolName: call.name,
-          output: redactValue(execution.toolResult.output),
-          isError: execution.toolResult.isError ?? false,
-        }, createEventContext(context, progress.iterations + progress.modelRequests + progress.toolCalls + 6, "tool")));
-        turn.toolInvocations.push(execution.invocation);
+
+        if (lifecycle.outcome === "approval_missing" || lifecycle.outcome === "approval_denied" || lifecycle.outcome === "blocked" || lifecycle.outcome === "unknown_tool") {
+          messages.push({
+            role: "tool",
+            content: serializeToolOutput(lifecycle.toolResult.output),
+            toolResult: lifecycle.toolResult,
+          });
+          continue;
+        }
+
+        if (!lifecycle.execution) {
+          continue;
+        }
+
+        turn.toolInvocations.push(lifecycle.execution.invocation);
         messages.push({
           role: "tool",
-          content: serializeToolOutput(execution.toolResult.output),
-          toolResult: execution.toolResult,
+          content: serializeToolOutput(lifecycle.execution.toolResult.output),
+          toolResult: lifecycle.execution.toolResult,
         });
         await sessionRuntime?.appendAssistantAndTools(messages, turn);
       }

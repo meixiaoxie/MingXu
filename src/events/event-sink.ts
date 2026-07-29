@@ -1,12 +1,11 @@
-import type { RuntimeEventEnvelope } from "./event-envelope.js";
+import type { RuntimeEvent } from "./types.js";
+import { NoopEventBus } from "./event-bus.js";
 
-export interface EventSink {
-  emit(event: RuntimeEventEnvelope): Promise<void>;
+export type EventSink = {
+  emit(event: RuntimeEvent): Promise<void>;
   flush?(): Promise<void>;
   close?(): Promise<void>;
   isHealthy?(): boolean;
-}
+};
 
-export class NoopEventSink implements EventSink {
-  async emit(_event: RuntimeEventEnvelope): Promise<void> {}
-}
+export class NoopEventSink extends NoopEventBus implements EventSink {}

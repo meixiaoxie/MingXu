@@ -1,11 +1,9 @@
 import type { AgentMessage } from "../core/types.js";
-import {
-  estimateContextTokens,
-  estimateMessageTokens,
-} from "./token-estimator.js";
+import { estimateContextTokens } from "./token-estimator.js";
 import type { SummaryGenerator } from "./summary-generator.js";
 import { defaultSummaryGenerator } from "./summary-generator.js";
 import { createRuntimeId } from "../core/runtime-id.js";
+import { findCompactionCutPoint } from "./compaction-cutpoints.js";
 
 /**
  * CompactionSettings：上下文压缩的配置。
@@ -48,44 +46,12 @@ export function shouldCompact(
 
 /**
  * 找安全切分点，把消息分成"要归档的"和"要保留的"两部分。
- *
- * 从后往前累积 token，当累积的 token 接近 keepRecentTokens 时停止。
- * 重要：不会在工具调用链条中间切开——如果最后一条是 toolResult，
- * 会把对应的 assistant + toolCalls 也保留下来，确保模型看到完整的工具调用对。
  */
 export function findCutPoint(
   messages: AgentMessage[],
   settings: CompactionSettings,
 ): { archived: AgentMessage[]; retained: AgentMessage[] } {
-  let retainedTokens = 0;
-  const retained: AgentMessage[] = [];
-
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i]!;
-    const tokens = estimateMessageTokens(msg);
-
-    if (
-      retainedTokens + tokens > settings.keepRecentTokens &&
-      retained.length > 0
-    ) {
-      // 如果当前是 toolResult，需要把对应的 assistant 也保留
-      // 不然模型会看到孤立的 toolResult 而没有对应的工具调用请求
-      if (msg.role === "toolResult") {
-        retained.unshift(msg);
-        retainedTokens += tokens;
-        continue;
-      }
-      break;
-    }
-
-    retained.unshift(msg);
-    retainedTokens += tokens;
-  }
-
-  return {
-    archived: messages.slice(0, messages.length - retained.length),
-    retained,
-  };
+  return findCompactionCutPoint(messages, settings);
 }
 
 /**

@@ -421,6 +421,7 @@ describe("mingxu CLI", () => {
     await writeFile(pluginPath, `
       export default {
         name: "blocked-plugin",
+        manifest: { name: "blocked-plugin", version: "1.0.0", kind: "tool" },
         async setup() {
           throw new Error("should never load");
         },

@@ -1,8 +1,7 @@
-import { Agent } from "../core/agent.js";
+import { AgentSession } from "../core/agent-session.js";
 import type { PluginConfig, ResolvedAgentConfig } from "../config/config-schema.js";
 import { resolveAgentConfig } from "../config/index.js";
 import { loadConfig } from "../config/load-config.js";
-import { FileSessionStore } from "../memory/file-session-store.js";
 import { loadCustomProviderModule } from "../models/custom-provider-loader.js";
 import { ProviderRegistry } from "../models/provider-registry.js";
 import { registerBuiltinProviders } from "../models/provider-catalog.js";
@@ -17,7 +16,7 @@ import type { EventSink } from "../events/event-sink.js";
 import { NoopEventSink } from "../events/event-sink.js";
 import { redactText, redactValue } from "../redaction/redactor.js";
 import { parseSecretRef } from "../redaction/secret-ref.js";
-import { FileSessionStore as VersionedFileSessionStore } from "../session/file-session-store.js";
+import { JsonlSessionStore } from "../session/jsonl-session-store.js";
 import { dirname, resolve } from "node:path";
 import { access, writeFile } from "node:fs/promises";
 import { createInitConfig, renderInitConfig, type InitProfile } from "./init-config.js";
@@ -175,16 +174,19 @@ function createDefaultRunner(
         path: plugin.path,
         trust: plugin.trust,
         configFilePath,
+        ...(plugin.kind !== undefined ? { kind: plugin.kind } : {}),
+        ...(plugin.manifest !== undefined ? { manifest: plugin.manifest } : {}),
       });
     }
 
-    const agent = new Agent({
+    const session = new AgentSession({
       model: runtimeModel,
       tools: [...toolRegistry.list()],
       ...(config.systemPrompt !== undefined ? { systemPrompt: config.systemPrompt } : {}),
       maxIterations: config.maxIterations,
+      ...(sessionStore !== undefined ? { sessionStore } : {}),
     });
-    const result = await agent.run(agentPrompt);
+    const result = await session.prompt(agentPrompt);
     await eventSink.flush?.();
     await eventSink.close?.();
     return result.content;
@@ -224,14 +226,14 @@ async function createSessionStore(
   config: ResolvedAgentConfig,
   configFilePath: string,
   sessionId?: string,
-): Promise<VersionedFileSessionStore | undefined> {
+): Promise<JsonlSessionStore | undefined> {
   const sessionDirectory = config.session?.dir
     ?? (config.sessionFile !== undefined ? dirname(resolveSessionFilePath(configFilePath, config.sessionFile)) : undefined);
   const sessionEnabled = config.session?.enabled ?? config.session?.save ?? config.sessionFile !== undefined;
   if (!sessionEnabled || !sessionDirectory) {
     return undefined;
   }
-  const store = new VersionedFileSessionStore(sessionDirectory);
+  const store = new JsonlSessionStore(sessionDirectory);
   await store.recoverInterruptedRuns();
   if (sessionId) {
     await store.getRequiredSession(sessionId);

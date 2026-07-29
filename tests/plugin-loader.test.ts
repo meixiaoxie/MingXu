@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { describe, expect, it, afterEach } from "vitest";
 
@@ -36,6 +36,7 @@ describe("PluginLoader", () => {
     const modulePath = await writePluginModule(root, "valid-plugin.mjs", `
       export default {
         name: "valid-plugin",
+        manifest: { name: "valid-plugin", version: "1.0.0", kind: "tool" },
         async setup(context) {
           context.registerTool({ name: "echo-extra" });
         },
@@ -70,6 +71,7 @@ describe("PluginLoader", () => {
     const modulePath = await writePluginModule(pluginsRoot, "scoped-plugin.mjs", `
       export default {
         name: "scoped-plugin",
+        manifest: { name: "scoped-plugin", version: "1.0.0", kind: "tool" },
         async setup() {},
       };
     `);
@@ -81,6 +83,8 @@ describe("PluginLoader", () => {
       path: "../plugins/scoped-plugin.mjs",
       configFilePath: configPath,
       trust: "trusted_local",
+      kind: "tool",
+      manifest: "scoped-plugin",
     });
 
     expect(resolved.resolvedPath).toBe(modulePath);
@@ -91,6 +95,7 @@ describe("PluginLoader", () => {
     const modulePath = await writePluginModule(root, "file-url-plugin.mjs", `
       export default {
         name: "file-url-plugin",
+        manifest: { name: "file-url-plugin", version: "1.0.0", kind: "tool" },
         async setup() {},
       };
     `);
@@ -98,6 +103,8 @@ describe("PluginLoader", () => {
     const resolved = await resolvePluginLoadRequest({
       path: pathToFileURL(modulePath).href,
       trust: "trusted_local",
+      kind: "tool",
+      manifest: "file-url-plugin",
     });
 
     expect(fileURLToPath(pathToFileURL(modulePath))).toBe(resolved.resolvedPath);
@@ -122,12 +129,14 @@ describe("PluginLoader", () => {
     const firstPath = await writePluginModule(root, "first.mjs", `
       export default {
         name: "duplicate-plugin",
+        manifest: { name: "duplicate-plugin", version: "1.0.0", kind: "tool" },
         async setup() {},
       };
     `);
     const secondPath = await writePluginModule(root, "second.mjs", `
       export default {
         name: "duplicate-plugin",
+        manifest: { name: "duplicate-plugin", version: "1.0.0", kind: "tool" },
         async setup() {},
       };
     `);
@@ -138,11 +147,28 @@ describe("PluginLoader", () => {
     expect(loader.list().map((plugin) => plugin.name)).toEqual(["duplicate-plugin"]);
   });
 
+  it("rejects executable plugins whose manifest kind is not supported in stage 8", async () => {
+    const root = await createTempRoot("mingxu-plugin-loader-");
+    const modulePath = await writePluginModule(root, "preset-plugin.mjs", `
+      export default {
+        name: "preset-plugin",
+        manifest: { name: "preset-plugin", version: "1.0.0", kind: "preset" },
+        async setup() {},
+      };
+    `);
+    const loader = new PluginLoader({ registerTool() {} });
+
+    await expect(loader.load({ path: modulePath, kind: "preset", manifest: "preset-plugin" })).rejects.toThrow(
+      "Plugin kind 'preset' is not executable in stage 8",
+    );
+  });
+
   it("propagates setup failures without leaving a half-registered plugin", async () => {
     const root = await createTempRoot("mingxu-plugin-loader-");
     const modulePath = await writePluginModule(root, "broken-setup.mjs", `
       export default {
         name: "broken-setup",
+        manifest: { name: "broken-setup", version: "1.0.0", kind: "tool" },
         async setup() {
           throw new Error("setup failed");
         },
@@ -159,6 +185,7 @@ describe("PluginLoader", () => {
     const modulePath = await writePluginModule(root, "rollback-plugin.mjs", `
       export default {
         name: "rollback-plugin",
+        manifest: { name: "rollback-plugin", version: "1.0.0", kind: "tool" },
         async setup(context) {
           context.registerTool({ name: "tool-a" });
           throw new Error("setup failed after tool registration");
@@ -190,6 +217,7 @@ describe("PluginLoader", () => {
     const modulePath = await writePluginModule(root, "duplicate-tool-plugin.mjs", `
       export default {
         name: "duplicate-tool-plugin",
+        manifest: { name: "duplicate-tool-plugin", version: "1.0.0", kind: "tool" },
         async setup(context) {
           context.registerTool({ name: "tool-a" });
           context.registerTool({ name: "tool-a" });

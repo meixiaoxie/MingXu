@@ -1,24 +1,23 @@
 import type { SessionEntry } from "../session/session-entry.js";
-import type { AgentMessage } from "../core/types.js";
+import type { AgentMessage } from "../core/messages.js";
 import type { AgentContext } from "../core/context.js";
 
-/**
- * 从 session entries 构建 AgentContext。
- * 找到最后一个 compact boundary 之后的所有 entries 来还原消息。
- * compact boundary 之前的消息已经被压缩成摘要了。
- */
-export function buildContextFromEntries(
-  entries: SessionEntry[],
-  systemPrompt?: string,
-): AgentContext {
-  // 找最后一个 compact boundary
+function getLatestCutIndex(entries: SessionEntry[]): number {
   let startIndex = 0;
-  for (let i = entries.length - 1; i >= 0; i--) {
-    if (entries[i]!.type === "compact_boundary") {
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    if (entries[i]!.type === "compact_boundary" || entries[i]!.type === "branch_point") {
       startIndex = i + 1;
       break;
     }
   }
+  return startIndex;
+}
+
+export function buildContextFromEntries(
+  entries: SessionEntry[],
+  systemPrompt?: string,
+): AgentContext {
+  const startIndex = getLatestCutIndex(entries);
 
   const messages: AgentMessage[] = [];
 
@@ -48,9 +47,6 @@ export function buildContextFromEntries(
   return result;
 }
 
-/**
- * 从 session entries 里提取消息列表（不含 summary/boundary 等元数据）。
- */
 export function entriesToMessages(entries: SessionEntry[]): AgentMessage[] {
   return entries.flatMap((entry) => {
     if (entry.type === "message") return [entry.message];

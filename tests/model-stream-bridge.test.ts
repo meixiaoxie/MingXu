@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { createRuntimeStreamFn } from "../src/index.js";
-import type { ModelAdapter, ModelEvent, ModelRequest } from "../src/index.js";
+import { createRuntimeStreamFn } from "../src/models/request-builder.js";
+import type { ModelAdapter } from "../src/models/provider-registry.js";
+import type { ModelEvent, ModelRequest } from "../src/models/model-protocol.js";
 
 describe("model stream bridge", () => {
   it("把 ModelEvent stream 正确转换为 AssistantStreamEvent", async () => {

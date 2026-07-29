@@ -1,5 +1,5 @@
 import { describe, expect, it, afterEach } from "vitest";
-import { FileMemoryStore } from "../src/index.js";
+import { FileMemoryStore } from "../src/memory/file-memory-store.js";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,6 +26,20 @@ describe("file memory store", () => {
     expect(results).toHaveLength(1);
     expect(results[0]!.key).toBe("test-memory");
     expect(results[0]!.content).toBe("This is a test memory");
+  });
+
+  it("会跳过项目说明文件，不把它们当成长期记忆", async () => {
+    testDir = await mkdtemp(join(tmpdir(), "mingxu-memory-instructions-"));
+    await writeFile(join(testDir, "MINGXU.md"), "project instructions", "utf8");
+    await writeFile(join(testDir, "note.md"), "content a", "utf8");
+
+    const store = new FileMemoryStore();
+    store.addScope("project", testDir);
+
+    const results = await store.query({ scope: "project" });
+    expect(results).toHaveLength(1);
+    expect(results[0]!.key).toBe("note");
+    expect(results[0]!.content).toBe("content a");
   });
 
   it("按 key 过滤", async () => {

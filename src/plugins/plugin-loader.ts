@@ -4,9 +4,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { createRuntimeEvent } from "../events/runtime-events.js";
 import type { Tool } from "../core/types.js";
-import type { Plugin, PluginContext } from "./plugin.js";
-
-type PluginModule = { default?: unknown; plugin?: unknown };
+import type { Plugin, PluginContext, PluginManifestV1, PluginKind } from "./plugin.js";
 
 const SUPPORTED_PLUGIN_EXTENSIONS = new Set([".js", ".mjs", ".cjs"]);
 
@@ -14,6 +12,8 @@ export interface PluginLoadRequest {
   readonly path: string;
   readonly configFilePath?: string;
   readonly trust?: "trusted_local" | "blocked";
+  readonly kind?: PluginKind;
+  readonly manifest?: string;
 }
 
 export interface ResolvedPluginSource {
@@ -21,6 +21,13 @@ export interface ResolvedPluginSource {
   readonly resolvedPath: string;
   readonly trust: "trusted_local" | "blocked";
   readonly sourceKind: "local_path" | "file_url";
+  readonly kind?: PluginKind;
+  readonly manifest?: string;
+}
+
+interface PluginMetadata {
+  kind?: PluginKind;
+  manifest?: PluginManifestV1;
 }
 
 /** Loads local ESM plugins while rejecting malformed modules and duplicate names. */
@@ -122,8 +129,6 @@ export async function resolvePluginLoadRequest(request: PluginLoadRequest): Prom
     resolvedPath = parseLocalFileUrl(trimmedPath);
     sourceKind = "file_url";
   } else {
-    // A colon before any slash indicates a URL scheme. The Windows drive-letter
-    // form is exempt so absolute local paths continue to work on Windows.
     if (hasUnsupportedScheme(trimmedPath)) {
       throw new Error("Plugin path must be a local filesystem path or file URL");
     }
@@ -160,18 +165,56 @@ export async function resolvePluginLoadRequest(request: PluginLoadRequest): Prom
     resolvedPath,
     trust,
     sourceKind,
+    ...(request.kind !== undefined ? { kind: request.kind } : {}),
+    ...(request.manifest !== undefined ? { manifest: request.manifest } : {}),
   };
 }
 
 async function importPlugin(request: PluginLoadRequest): Promise<Plugin> {
   const pluginSource = await resolvePluginLoadRequest(request);
-  const imported = await import(pathToFileURL(pluginSource.resolvedPath).href) as PluginModule;
+  const imported = await import(pathToFileURL(pluginSource.resolvedPath).href) as { default?: unknown; plugin?: unknown };
   const candidate = imported.default ?? imported.plugin;
 
   if (!isPlugin(candidate)) {
     throw new Error(`Plugin module must export a plugin as default or "plugin": ${request.path}`);
   }
+
+  const pluginMetadata = extractPluginMetadata(candidate);
+  validatePluginMetadata(pluginSource, pluginMetadata);
+
   return candidate;
+}
+
+function extractPluginMetadata(plugin: Plugin): PluginMetadata {
+  return {
+    ...(plugin.kind !== undefined ? { kind: plugin.kind } : {}),
+    ...(plugin.manifest !== undefined ? { manifest: plugin.manifest } : {}),
+  };
+}
+
+function validatePluginMetadata(source: ResolvedPluginSource, metadata: PluginMetadata): void {
+  const declaredKind = metadata.kind ?? metadata.manifest?.kind;
+  if (declaredKind !== undefined && declaredKind !== "tool") {
+    throw new Error(`Plugin kind '${declaredKind}' is not executable in stage 8`);
+  }
+
+  if (source.kind !== undefined && source.kind !== "tool") {
+    throw new Error(`Plugin kind '${source.kind}' is not executable in stage 8`);
+  }
+
+  if (source.kind !== undefined && declaredKind !== undefined && source.kind !== declaredKind) {
+    throw new Error(`Plugin kind mismatch: requested ${source.kind}, module declared ${declaredKind}`);
+  }
+
+  if (source.manifest !== undefined) {
+    const declaredName = metadata.manifest?.name;
+    if (declaredName === undefined) {
+      throw new Error(`Plugin manifest mismatch: expected ${source.manifest}, got none`);
+    }
+    if (declaredName !== source.manifest) {
+      throw new Error(`Plugin manifest mismatch: expected ${source.manifest}, got ${declaredName}`);
+    }
+  }
 }
 
 function parseLocalFileUrl(modulePath: string): string {
@@ -182,8 +225,6 @@ function parseLocalFileUrl(modulePath: string): string {
     throw new Error(`Invalid plugin file URL: ${modulePath}`, { cause: error });
   }
 
-  // Credentials, remote hosts, query strings, and fragments have no useful
-  // meaning for a local plugin and can hide a misleading import target.
   if (url.protocol !== "file:"
     || (url.hostname !== "" && url.hostname !== "localhost")
     || url.username !== ""

@@ -1,4 +1,3 @@
-import { access } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 import type { ResolvedAgentConfig } from "../config/config-schema.js";
@@ -136,12 +135,21 @@ async function collectPluginChecks(
         path: plugin.path,
         trust: plugin.trust,
         configFilePath: configPath,
+        ...(plugin.kind !== undefined ? { kind: plugin.kind } : {}),
+        ...(plugin.manifest !== undefined ? { manifest: plugin.manifest } : {}),
       });
       results.push({
-        level: "PASS",
+        level: plugin.kind && plugin.kind !== "tool" ? "WARN" : "PASS",
         label: `plugin:${plugin.path}`,
-        detail: `Plugin resolves to ${resolved.resolvedPath} with trust ${resolved.trust}.`,
+        detail: `Plugin resolves to ${resolved.resolvedPath} with trust ${resolved.trust}${resolved.kind !== undefined ? ` and kind ${resolved.kind}` : ""}.`,
       });
+      if (plugin.permissions !== undefined) {
+        results.push({
+          level: "PASS",
+          label: `plugin-permissions:${plugin.path}`,
+          detail: `Plugin declares permissions: ${JSON.stringify(plugin.permissions)}.`,
+        });
+      }
     } catch (error) {
       results.push({
         level: "FAIL",

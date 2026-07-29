@@ -346,7 +346,7 @@ export type ToolExecutionMode = "sequential" | "parallel";
 // 流式 Agent Loop 的完整配置。在 Stage E 中 runStreamingAgentLoop() 使用。
 // 这里提前声明类型，方便后面各阶段引用。
 
-import type { AgentEventSink } from "./events.js";
+import type { AgentEventSink } from "../events/types.js";
 import type { TransformContext } from "./context.js";
 import type { StreamFn } from "./stream-types.js";
 import type { AgentHooks } from "../hooks/hook-types.js";

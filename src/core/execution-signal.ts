@@ -4,6 +4,12 @@ export interface ExecutionSignalScope {
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
   readonly deadline?: string;
+  readonly runId?: string;
+  readonly turnId?: string;
+  readonly traceId?: string;
+  readonly schemaVersion?: string;
+  readonly sequence?: number;
+  readonly startedAt?: string;
 }
 
 /**
@@ -32,11 +38,11 @@ export function createExecutionSignal(scope: ExecutionSignalScope): AbortSignal 
   return AbortSignal.any(signals);
 }
 
-export function withExecutionSignal(context: RunContext, timeoutMs?: number): AbortSignal | undefined {
+export function withExecutionSignal(scope: ExecutionSignalScope, timeoutMs?: number): AbortSignal | undefined {
   return createExecutionSignal({
-    ...(context.signal ? { signal: context.signal } : {}),
+    ...(scope.signal ? { signal: scope.signal } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-    ...(context.deadline ? { deadline: context.deadline } : {}),
+    ...(scope.deadline ? { deadline: scope.deadline } : {}),
   });
 }
 
