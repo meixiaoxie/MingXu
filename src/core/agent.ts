@@ -1,21 +1,18 @@
 import { createGenerateFallbackStreamFn } from "./stream-fn.js";
 import { ControlQueue } from "./control-queue.js";
-import { runStreamingAgentLoop } from "./streaming-agent-loop.js";
+import { runAgentLoop } from "./agent-loop.js";
 import { createRuntimeId } from "./runtime-id.js";
 import type {
   AgentLoopResult,
+  AgentLoopOptions,
   AgentMessage,
   AgentState,
   Message,
   ModelProvider,
 } from "./types.js";
 import type { AgentEventListener, AgentEvent } from "../events/types.js";
-import type { StreamFn } from "./stream-types.js";
-import type { AgentHooks } from "../hooks/hook-types.js";
-import type { TransformContext } from "./context.js";
-import type { JsonlSessionStore } from "../session/jsonl-session-types.js";
-import type { CompactionSettings } from "../context/compaction.js";
 import type { MemoryQuery, MemoryEntry } from "../memory/memory-scope.js";
+import type { AgentHooks } from "../hooks/hook-types.js";
 
 /** Agent 内用的轻量记忆管理器接口 */
 export interface AgentMemoryManager {
@@ -23,19 +20,9 @@ export interface AgentMemoryManager {
 }
 
 /** Agent 构造函数参数，支持额外透传字段 */
-export interface AgentOptions {
-  model: ModelProvider;
+export interface AgentOptions extends Omit<AgentLoopOptions, "initialMessages" | "continueOnly" | "emit"> {
   modelKey?: string;
-  streamFn?: StreamFn;
-  systemPrompt?: string;
-  tools?: import("./types.js").Tool[];
-  maxIterations?: number;
-  hooks?: AgentHooks;
-  transformContext?: TransformContext;
-  sessionStore?: JsonlSessionStore;
-  sessionId?: string;
   memoryManager?: AgentMemoryManager;
-  compaction?: CompactionSettings;
 }
 
 /**
@@ -60,9 +47,11 @@ export class Agent {
   #abortController: AbortController | undefined;
   #lastInput: string | undefined;
   #lastStableMessages: AgentMessage[] = [];
+  #sessionId: string | undefined;
 
   constructor(options: AgentOptions) {
     this.#options = options;
+    this.#sessionId = options.sessionId;
     this.#state = makeInitialState(options);
   }
 
@@ -106,16 +95,18 @@ export class Agent {
         this.#options,
         streamFn,
         allMessages,
+        this.#sessionId,
         this.#abortController.signal,
-        (event: AgentEvent) => {
+        async (event: AgentEvent) => {
           this.#state = reduceAgentState(this.#state, event);
-          emitAll(this.#listeners, event);
+          await emitAll(this.#listeners, event);
         },
       );
 
-      const result = await runStreamingAgentLoop({ userInput }, loopOpts);
+      const result = await runAgentLoop(userInput, loopOpts);
 
-      this.#state.messages = result.messages;
+      this.#state.messages = result.messages.map(messageToAgentMessage);
+      this.#sessionId = result.sessionId ?? this.#sessionId;
       this.#state.isStreaming = false;
 
       await emitAll(this.#listeners, { type: "agent_end", state: this.#state });
@@ -124,7 +115,7 @@ export class Agent {
       const followUp = this.#followUpQueue.drainOne();
       if (followUp) return this.prompt(followUp);
 
-      return toLegacyResult(result);
+      return result;
     } catch (error) {
       this.#state.isStreaming = false;
       this.#state.errorMessage =
@@ -154,21 +145,21 @@ export class Agent {
         this.#options,
         streamFn,
         this.#state.messages,
+        this.#sessionId,
         this.#abortController.signal,
-        (event: AgentEvent) => {
+        async (event: AgentEvent) => {
           this.#state = reduceAgentState(this.#state, event);
-          emitAll(this.#listeners, event);
+          await emitAll(this.#listeners, event);
         },
+        true,
       );
 
-      const result = await runStreamingAgentLoop(
-        { continueOnly: true },
-        loopOpts,
-      );
+      const result = await runAgentLoop("", loopOpts);
 
-      this.#state.messages = result.messages;
+      this.#state.messages = result.messages.map(messageToAgentMessage);
+      this.#sessionId = result.sessionId ?? this.#sessionId;
       this.#state.isStreaming = false;
-      return toLegacyResult(result);
+      return result;
     } finally {
       this.#abortController = undefined;
     }
@@ -220,34 +211,23 @@ function makeInitialState(options: AgentOptions): AgentState {
 
 function makeLoopOptions(
   options: AgentOptions,
-  streamFn: StreamFn,
+  streamFn: NonNullable<AgentLoopOptions["streamFn"]>,
   messages: AgentMessage[],
+  sessionId: string | undefined,
   signal: AbortSignal | undefined,
   emit: (event: AgentEvent) => void,
-): import("./types.js").StreamingAgentLoopOptions {
-  const result: import("./types.js").StreamingAgentLoopOptions = {
-    model: options.modelKey ?? "default",
+  continueOnly = false,
+): AgentLoopOptions {
+  const result: AgentLoopOptions = {
+    ...options,
+    model: options.model,
     streamFn,
-    messages,
-    tools: options.tools ?? [],
-    maxIterations: options.maxIterations ?? 10,
+    initialMessages: messages.map(agentMsgToMessage),
     emit,
+    ...(continueOnly ? { continueOnly: true } : {}),
   };
-  if (options.hooks !== undefined) result.hooks = options.hooks;
-  if (options.transformContext !== undefined)
-    result.transformContext = options.transformContext;
-  if (options.sessionId !== undefined) result.sessionId = options.sessionId;
-  if (options.compaction !== undefined)
-    result.compaction = options.compaction;
-  if (options.systemPrompt !== undefined) {
-    result.systemPrompt = options.systemPrompt;
-  }
-  if (options.sessionStore !== undefined) {
-    result.sessionStore = options.sessionStore;
-  }
-  if (signal !== undefined) {
-    result.signal = signal;
-  }
+  if (sessionId !== undefined) result.sessionId = sessionId;
+  if (signal !== undefined) result.signal = signal;
   return result;
 }
 
@@ -364,20 +344,6 @@ function createSteeringMessage(content: string): AgentMessage {
   };
 }
 
-/** 把新的 loop 结果转回旧 AgentLoopResult 格式 */
-function toLegacyResult(result: {
-  content: string;
-  messages: AgentMessage[];
-  iterations: number;
-}): AgentLoopResult {
-  return {
-    content: result.content,
-    messages: result.messages.map(agentMsgToMessage),
-    iterations: result.iterations,
-    terminationReason: "completed",
-  };
-}
-
 function agentMsgToMessage(msg: AgentMessage): Message {
   switch (msg.role) {
     case "user":
@@ -398,4 +364,19 @@ function agentMsgToMessage(msg: AgentMessage): Message {
     case "summary":
       return { role: "user", content: msg.content };
   }
+}
+
+function messageToAgentMessage(message: Message): AgentMessage {
+  const base = {
+    id: createRuntimeId(message.role),
+    content: message.content,
+    createdAt: new Date().toISOString(),
+  };
+  if (message.role === "assistant") {
+    return { ...base, role: "assistant", ...(message.toolCalls ? { toolCalls: message.toolCalls } : {}) };
+  }
+  if (message.role === "tool") {
+    return { ...base, role: "toolResult", toolResult: message.toolResult };
+  }
+  return { ...base, role: "user" };
 }

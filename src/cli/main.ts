@@ -6,6 +6,7 @@ import { loadCustomProviderModule } from "../models/custom-provider-loader.js";
 import { ProviderRegistry } from "../models/provider-registry.js";
 import { registerBuiltinProviders } from "../models/provider-catalog.js";
 import { createRuntimeModelProvider } from "../models/model-runtime.js";
+import { createRuntimeStreamFn } from "../models/request-builder.js";
 import { PluginLoader, resolvePluginLoadRequest } from "../plugins/plugin-loader.js";
 import { echoTool } from "../tools/builtin/echo-tool.js";
 import { readFileTool } from "../tools/builtin/read-file-tool.js";
@@ -117,6 +118,7 @@ function createDefaultRunner(
     }
 
     const eventSink = createEventSink(config);
+    try {
     const secretRefs = collectSecretRefs(config);
     const sessionStore = await createSessionStore(config, configFilePath, sessionId);
 
@@ -152,6 +154,7 @@ function createDefaultRunner(
       provider: selection.provider,
     });
     const runtimeModel = createRuntimeModelProvider(adapter, selection.model, providerDebug);
+    const runtimeStreamFn = createRuntimeStreamFn(adapter, selection.model, providerDebug);
 
     // Built-in and plugin tools share one registry so duplicate names are caught
     // during startup and the Agent receives one complete tool list.
@@ -181,15 +184,26 @@ function createDefaultRunner(
 
     const session = new AgentSession({
       model: runtimeModel,
+      streamFn: runtimeStreamFn,
       tools: [...toolRegistry.list()],
       ...(config.systemPrompt !== undefined ? { systemPrompt: config.systemPrompt } : {}),
       maxIterations: config.maxIterations,
       ...(sessionStore !== undefined ? { sessionStore } : {}),
+      ...(sessionId !== undefined ? { sessionId } : {}),
+      eventSink,
+      audit: {
+        ...(config.audit?.failClosedForHighRisk !== undefined
+          ? { failClosedForHighRisk: config.audit.failClosedForHighRisk }
+          : {}),
+      },
+      secretRefs,
     });
     const result = await session.prompt(agentPrompt);
-    await eventSink.flush?.();
-    await eventSink.close?.();
     return result.content;
+    } finally {
+      await eventSink.flush?.();
+      await eventSink.close?.();
+    }
   };
 }
 

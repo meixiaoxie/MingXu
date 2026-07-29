@@ -6,6 +6,11 @@ import type { SecretRef } from "../redaction/secret-ref.js";
 import type { ApprovalStore } from "../approval/types.js";
 import type { PolicyEngine } from "../policy/types.js";
 import type { SessionStore } from "../session/session-store.js";
+import type { AgentHooks } from "../hooks/hook-types.js";
+import type { CompactionSettings } from "../context/compaction.js";
+import type { TransformContext } from "./context.js";
+import type { StreamFn } from "./stream-types.js";
+import type { AgentEventSink } from "../events/types.js";
 // 从 model-protocol 导入 ModelUsage，避免重复定义
 import type { ModelUsage } from "../models/model-protocol.js";
 
@@ -249,6 +254,13 @@ export interface AgentLoopOptions {
   secretRefs?: Readonly<Record<string, SecretRef>>;
   sessionStore?: SessionStore;
   legacySessionStore?: MemoryStore<Message[]>;
+  streamFn?: StreamFn;
+  emit?: AgentEventSink;
+  hooks?: AgentHooks;
+  transformContext?: TransformContext;
+  compaction?: CompactionSettings;
+  initialMessages?: Message[];
+  continueOnly?: boolean;
 }
 
 export interface AgentLoopResult {
@@ -257,6 +269,7 @@ export interface AgentLoopResult {
   iterations: number;
   terminationReason: RunTerminationReason;
   usage?: RunAccounting;
+  sessionId?: string;
 }
 
 // ============================================================
@@ -341,43 +354,4 @@ export interface ToolExecutionContext {
 
 /** 工具的执行模式：串行（sequential）或并行（parallel） */
 export type ToolExecutionMode = "sequential" | "parallel";
-
-// ---- StreamingAgentLoopOptions ----
-// 流式 Agent Loop 的完整配置。在 Stage E 中 runStreamingAgentLoop() 使用。
-// 这里提前声明类型，方便后面各阶段引用。
-
-import type { AgentEventSink } from "../events/types.js";
-import type { TransformContext } from "./context.js";
-import type { StreamFn } from "./stream-types.js";
-import type { AgentHooks } from "../hooks/hook-types.js";
-import type { JsonlSessionStore } from "../session/jsonl-session-types.js";
-import type { CompactionSettings } from "../context/compaction.js";
-
-export interface StreamingAgentLoopOptions {
-  /** 模型标识 */
-  model: string;
-  /** 流式函数入口 */
-  streamFn: StreamFn;
-  /** 初始消息列表（可以从 session 恢复） */
-  messages?: AgentMessage[];
-  /** 可用工具列表 */
-  tools?: Tool[];
-  /** 系统提示词 */
-  systemPrompt?: string;
-  /** 最大循环次数 */
-  maxIterations?: number;
-  /** 取消信号 */
-  signal?: AbortSignal;
-  /** 事件发送器 */
-  emit?: AgentEventSink;
-  /** 上下文转换函数 */
-  transformContext?: TransformContext;
-  /** hook 集合 */
-  hooks?: AgentHooks;
-  /** JSONL session store（每轮完成后写入） */
-  sessionStore?: JsonlSessionStore;
-  sessionId?: string;
-  /** compaction 设置，默认不开启 */
-  compaction?: CompactionSettings;
-}
 

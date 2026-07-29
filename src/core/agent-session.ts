@@ -3,7 +3,6 @@ import { Agent } from "./agent.js";
 import type { AgentLoopResult } from "./types.js";
 
 export interface AgentSessionOptions extends AgentOptions {
-  readonly eventSink?: unknown;
 }
 
 export class AgentSession {

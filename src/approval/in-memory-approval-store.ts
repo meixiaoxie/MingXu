@@ -7,10 +7,11 @@ export class InMemoryApprovalStore implements ApprovalStore {
     this.#records.set(record.id, record);
   }
 
-  async findMatching(requestFingerprint: string): Promise<ApprovalRecord | undefined> {
+  async findMatching(requestFingerprint: string, principalId: string): Promise<ApprovalRecord | undefined> {
     const now = Date.now();
     for (const record of this.#records.values()) {
       if (record.requestFingerprint !== requestFingerprint) continue;
+      if (record.principalId !== principalId) continue;
       if (record.revokedAt !== undefined) continue;
       if (record.expiresAt !== undefined && Date.parse(record.expiresAt) <= now) continue;
       return record;

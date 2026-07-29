@@ -17,7 +17,7 @@ describe("approval store", () => {
       createdAt: new Date().toISOString(),
     });
 
-    const record = await store.findMatching("fp-1");
+    const record = await store.findMatching("fp-1", "local-user");
     expect(record?.id).toBe("approval-1");
     expect(isApprovalUsable(record)).toBe(true);
   });
@@ -47,7 +47,23 @@ describe("approval store", () => {
       revokedAt: new Date().toISOString(),
     });
 
-    expect(await store.findMatching("fp-2")).toBeUndefined();
-    expect(await store.findMatching("fp-3")).toBeUndefined();
+    expect(await store.findMatching("fp-2", "local-user")).toBeUndefined();
+    expect(await store.findMatching("fp-3", "local-user")).toBeUndefined();
+  });
+
+  it("does not reuse an approval across principals", async () => {
+    const store = new InMemoryApprovalStore();
+    await store.add({
+      id: "approval-principal-a",
+      requestFingerprint: "fp-shared",
+      principalId: "principal-a",
+      actionKind: "tool.call",
+      resourceScope: "echo",
+      operator: "principal-a",
+      decision: "allow",
+      createdAt: new Date().toISOString(),
+    });
+
+    expect(await store.findMatching("fp-shared", "principal-b")).toBeUndefined();
   });
 });

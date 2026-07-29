@@ -64,6 +64,7 @@ describe("tool lifecycle", () => {
     await approvalStore.add({
       id: "approval-1",
       requestFingerprint: JSON.stringify({
+        principal: { kind: "user", id: "local-user" },
         action: { kind: "tool.call", name: "approved" },
         resource: { kind: "tool", toolName: "approved" },
         normalizedInput: { value: 1 },
@@ -191,6 +192,7 @@ describe("tool lifecycle", () => {
     await approvalStore.add({
       id: "approval-1",
       requestFingerprint: JSON.stringify({
+        principal: { kind: "user", id: "local-user" },
         action: { kind: "tool.call", name: "approved" },
         resource: { kind: "tool", toolName: "approved" },
         normalizedInput: { value: 1 },

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -102,6 +102,41 @@ describe("session runtime recovery", () => {
 
       const transcript = await readFile(join(root, `${legacyId}.jsonl`), "utf8");
       expect(transcript).toContain(legacyId);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects session identifiers that escape the session directory", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mingxu-session-runtime-safe-"));
+    const store = new JsonlSessionStore(join(root, "sessions"));
+
+    try {
+      expect(() => store.createSession({ sessionId: "../escaped" })).toThrow(
+        "Session ID is not a safe storage key",
+      );
+      await expect(readFile(join(root, "escaped.jsonl"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects reserved session IDs and symbolic-link transcript targets", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mingxu-session-target-safe-"));
+    const sessionRoot = join(root, "sessions");
+    const outside = join(root, "outside");
+    const sentinel = join(outside, "sentinel.jsonl");
+    const store = new JsonlSessionStore(sessionRoot);
+
+    try {
+      expect(() => store.createSession({ sessionId: "NUL" })).toThrow("Session ID is not a safe storage key");
+      await mkdir(sessionRoot, { recursive: true });
+      await mkdir(outside);
+      await writeFile(sentinel, "sentinel", "utf8");
+      await symlink(outside, join(sessionRoot, "linked.jsonl"), process.platform === "win32" ? "junction" : "dir");
+      const document = await store.createSession({ sessionId: "linked" });
+      await expect(store.saveSession(document, 0)).rejects.toThrow("Storage target cannot be a symbolic link");
+      expect(await readFile(sentinel, "utf8")).toBe("sentinel");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -31,6 +31,7 @@ export interface ToolLifecycleDependencies {
   } | undefined;
   readonly principalId: string | undefined;
   readonly interactive: boolean | undefined;
+  readonly transformExecution?: (execution: ToolExecutorResult) => Promise<ToolExecutorResult>;
 }
 
 export interface ToolLifecycleResult {
@@ -59,7 +60,7 @@ export async function executeToolLifecycle(
     };
   }
 
-  if (tool.riskLevel === "high" && deps.audit?.failClosedForHighRisk && deps.eventSink?.isHealthy?.() === false) {
+  if (tool.riskLevel === "high" && deps.audit?.failClosedForHighRisk && deps.eventSink?.isHealthy?.() !== true) {
     throw new Error(`High-risk tool requires a healthy audit sink: ${request.name}`);
   }
 
@@ -93,11 +94,12 @@ export async function executeToolLifecycle(
 
   if (decision.effect === "ask") {
     const requestFingerprint = JSON.stringify({
+      principal: policyRequest.principal,
       action: policyRequest.action,
       resource: policyRequest.resource,
       normalizedInput: policyRequest.normalizedInput,
     });
-    const approval = await deps.approvalStore.findMatching(requestFingerprint);
+    const approval = await deps.approvalStore.findMatching(requestFingerprint, policyRequest.principal.id);
     if (!isApprovalUsable(approval)) {
       await deps.eventSink?.emit(createRuntimeEvent("approval.missing", {
         toolCallId: request.toolCallId,
@@ -139,13 +141,14 @@ export async function executeToolLifecycle(
       toolName: request.name,
       input: redactValue(resolveInput(request)),
     }, createEventContext(request.context, "tool")));
-    const execution = await deps.executor.execute({
+    let execution = await deps.executor.execute({
       name: request.name,
       input: resolveInput(request),
       toolCallId: request.toolCallId,
       context: request.context,
       ...(request.context.timeoutMs !== undefined ? { timeoutMs: request.context.timeoutMs } : {}),
     });
+    if (deps.transformExecution) execution = await deps.transformExecution(execution);
     await deps.eventSink?.emit(createRuntimeEvent(execution.toolResult.isError ? "tool.call.error" : "tool.call.end", {
       toolCallId: request.toolCallId,
       toolName: request.name,
@@ -172,13 +175,14 @@ export async function executeToolLifecycle(
     toolName: request.name,
     input: redactValue(resolveInput(request)),
   }, createEventContext(request.context, "tool")));
-  const execution = await deps.executor.execute({
+  let execution = await deps.executor.execute({
     name: request.name,
     input: resolveInput(request),
     toolCallId: request.toolCallId,
     context: request.context,
     ...(request.context.timeoutMs !== undefined ? { timeoutMs: request.context.timeoutMs } : {}),
   });
+  if (deps.transformExecution) execution = await deps.transformExecution(execution);
   await deps.eventSink?.emit(createRuntimeEvent(execution.toolResult.isError ? "tool.call.error" : "tool.call.end", {
     toolCallId: request.toolCallId,
     toolName: request.name,

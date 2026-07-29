@@ -7,6 +7,7 @@ import type { Message, Run, RunTerminationReason, ToolResult, Turn } from "../co
 import { migrateLegacySessionDocument } from "./session-migrations.js";
 import type { SessionEntry } from "./session-entry.js";
 import { SESSION_SCHEMA_VERSION } from "./schema-version.js";
+import { assertSafeStorageKey, assertSafeStorageTarget, resolveSafeStoragePath } from "../storage/safe-storage-path.js";
 import type {
   SessionDocument,
   SessionRecord,
@@ -126,6 +127,7 @@ export class JsonlSessionStore implements JsonlSessionStoreInterface, SessionSto
 
   createSession(input: { sessionId?: string; title?: string } = {}): Promise<SessionDocument> {
     const sessionId = input.sessionId ?? randomUUID();
+    assertSafeStorageKey(sessionId, "Session ID");
     const now = new Date().toISOString();
     return Promise.resolve({
       schemaVersion: SESSION_SCHEMA_VERSION,
@@ -144,6 +146,7 @@ export class JsonlSessionStore implements JsonlSessionStoreInterface, SessionSto
   }
 
   async getSession(sessionId: string): Promise<SessionDocument | undefined> {
+    assertSafeStorageKey(sessionId, "Session ID");
     return this.#run(async () => this.#readCurrentSessionDocument(sessionId, true));
   }
 
@@ -351,6 +354,7 @@ export class JsonlSessionStore implements JsonlSessionStoreInterface, SessionSto
   async #appendSessionSnapshot(document: SessionDocument): Promise<void> {
     const transcriptPath = this.#sessionTranscriptPath(document.session.sessionId);
     await mkdir(dirname(transcriptPath), { recursive: true });
+    await assertSafeStorageTarget(this.#path, transcriptPath);
     await appendFile(transcriptPath, `${JSON.stringify(document)}\n`, "utf8");
   }
 
@@ -363,6 +367,11 @@ export class JsonlSessionStore implements JsonlSessionStoreInterface, SessionSto
       if (!entry.isFile()) continue;
       if (entry.name.endsWith(".jsonl")) {
         const id = entry.name.slice(0, -".jsonl".length);
+        try {
+          assertSafeStorageKey(id, "Session ID");
+        } catch {
+          continue;
+        }
         sessionIds.add(id);
         jsonlIds.add(id);
       }
@@ -371,6 +380,11 @@ export class JsonlSessionStore implements JsonlSessionStoreInterface, SessionSto
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
       const id = entry.name.slice(0, -".json".length);
+      try {
+        assertSafeStorageKey(id, "Session ID");
+      } catch {
+        continue;
+      }
       if (!jsonlIds.has(id)) {
         sessionIds.add(id);
       }
@@ -380,11 +394,11 @@ export class JsonlSessionStore implements JsonlSessionStoreInterface, SessionSto
   }
 
   #sessionTranscriptPath(sessionId: string): string {
-    return join(this.#path, `${sessionId}.jsonl`);
+    return resolveSafeStoragePath(this.#path, sessionId, ".jsonl", "Session ID");
   }
 
   #legacySessionPath(sessionId: string): string {
-    return join(this.#path, `${sessionId}.json`);
+    return resolveSafeStoragePath(this.#path, sessionId, ".json", "Session ID");
   }
 
   #isSessionDocument(value: unknown, expectedSessionId?: string): value is SessionDocument {

@@ -128,11 +128,17 @@ function toToolCall(toolCall: ModelToolCall): ToolCall {
 export function createRuntimeStreamFn(
   adapter: ModelAdapter,
   config: ModelConfig,
+  debug?: ProviderDebugLogger,
 ): StreamFn {
   return async function* runtimeStreamFn(_model, context, options) {
     const input = await defaultConvertToLlm(context);
     const executor = new ModelExecutor(adapter, config);
     const assistantMessageId = createRuntimeId("assistant");
+    debug?.log("request-builder.model-request", {
+      adapterProvider: adapter.provider,
+      modelConfig: config,
+      request: toModelRequest(input, config),
+    });
 
     for await (const event of executor.stream({
       input,

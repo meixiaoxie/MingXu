@@ -16,5 +16,5 @@ export interface ApprovalRecord {
 
 export interface ApprovalStore {
   add(record: ApprovalRecord): Promise<void>;
-  findMatching(requestFingerprint: string): Promise<ApprovalRecord | undefined>;
+  findMatching(requestFingerprint: string, principalId: string): Promise<ApprovalRecord | undefined>;
 }

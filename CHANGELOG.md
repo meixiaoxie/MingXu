@@ -10,6 +10,11 @@ The project follows a practical pre-1.0 compatibility policy:
 
 ## Unreleased
 
+- Consolidated CLI, `AgentSession`, and `Agent` execution onto `runAgentLoop`, including streaming, hooks, compaction, governed parallel tool execution, audit events, and terminal session persistence.
+- Added optional `AgentLoopResult.sessionId`; new sessions return their generated ID and resumed sessions load their saved message history.
+- Changed approval matching to include `principalId` in both lookup and request fingerprints. Approval fingerprints created by earlier builds are intentionally invalidated.
+- Hardened file-backed session and memory identifiers against path traversal, reserved names, and symbolic-link write targets.
+- Builds now clean `dist` before compilation, and package smoke tests fail when npm cannot be launched instead of reporting skipped success.
 - Added the staged runtime-rewrite roadmap and architecture ADRs for the unique runtime chain, append-only session history, permissions and sandbox boundaries, memory/resource loading, and third-party provenance.
 - Added third-party provenance notices and MIT license text for `pi-mono` reuse.
 - Added a current-runtime characterization test to pin the existing CLI/session/public API baseline before the rewrite stages start.

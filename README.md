@@ -11,6 +11,7 @@
 现在已经可以真实使用的能力有：
 
 - 最小 Agent Loop：用户消息 → 模型响应 → 工具调用 → 下一轮模型请求。
+- 唯一运行主链：CLI、`AgentSession` 和 `Agent` 最终统一进入 `runAgentLoop`；流式模型与 generate fallback 共享同一套 hook、policy、approval、audit 和 Session 生命周期。
 - CLI 参数：`--config`、`--prompt`、`--help`、`--version`。
 - 新版多模型配置：`defaultModel + models`。
 - 旧版单模型配置兼容：`model` 会自动归一化成新版结构。
@@ -29,7 +30,7 @@
 这里有两个边界要先说清楚，避免把“已经有一点雏形”和“已经正式支持”混在一起：
 
 - `customProviders.module` 现在可以作为**实验性兼容入口**使用，也就是“先让你从本地模块接进一个自定义 provider”；它还不是稳定的正式 provider 插件 API。
-- README 现在不把 streaming（流式输出，也就是模型边生成边返回）算作 v0.1 已承诺能力。路线图已经明确要求把这项能力按真实状态收紧，避免文档先说得太满。
+- SDK 运行时支持 streaming（流式输出，也就是模型边生成边返回）；不具备原生流能力的 provider 会自动使用 generate fallback，并保持相同的治理与会话行为。
 
 ## 当前还没有实现
 
@@ -73,7 +74,7 @@
 - 不能说当前 CLI 不支持 `--model <key>`；这个能力已经实现，但 README 仍不能把它说成“多模型完整调度系统”。
 - 不能说现在还只有“messages KV”级会话保存；当前已经有版本化本地 Session 文档、revision 冲突保护、legacy 迁移和最小 `resume` / recent sessions 能力，但还不是企业级会话数据库。
 - 不能说已经有完整企业级 Policy / Approval 平台；当前只有最小核心授权链和版本化事件/审计主链。
-- 不能说已经支持 streaming，或把它当成 v0.1 对外承诺的一部分。
+- 不能说每个 provider 都具备原生 streaming；SDK 会在 provider 不支持时使用 generate fallback。
 
 ### 这版 v0.1 的插件范围
 
