@@ -36,7 +36,7 @@
 
 下面这些能力已经在路线图里，但当前版本还不能宣称已经完成：
 
-- `mingxu init`、`mingxu doctor`、`mingxu plugin` 等子命令。
+- `mingxu plugin` 等插件管理子命令；`init`、`doctor`、`resume` 和 `sessions` 已可用。
 - plugin manifest、插件权限审批、allowlist / blocklist。
 - 完整的企业级 Policy / Approval 平台（当前只有最小核心授权链，主要覆盖工具调用与文件访问）。
 - MCP connector、长期 Memory、声明式 Agent Preset。

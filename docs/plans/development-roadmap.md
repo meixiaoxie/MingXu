@@ -15,7 +15,7 @@
 | 3 | 统一工具生命周期 | 已完成 | 已新增 `tool-lifecycle`，把 policy、approval、audit、tool executor 串成单层入口，并补了对应测试。 |
 | 4 | Session 迁移 | 已完成 | 新会话主路径切到 JSONL，旧 JSON / legacy messages 继续作为兼容输入，并补了 bootstrap 与恢复测试。 |
 | 5 | AgentSession 与 CLI 切换 | 已完成 | CLI、`AgentSession` 与 `Agent` 已统一进入 `runAgentLoop`，工具调用统一经过 policy、approval、audit 与 Session 生命周期。 |
-| 6 | 上下文压缩 | 待开始 | 落地多层 compaction。 |
+| 6 | 上下文压缩 | 已完成 | compaction、切分点、摘要生成与 context overflow 单次恢复已接入统一 loop。 |
 | 7 | 指令、Memory、资源与安全 | 待开始 | 区分指令、长期 Memory 和 Session。 |
 | 8 | Extensions / MCP / Skills / Subagent | 待开始 | 在核心稳定后再接扩展层。 |
 | 9 | 删除旧轨 | 已完成 | 旧实现和旧兼容导出已收口，根入口只保留正式 API。 |
@@ -28,6 +28,12 @@
 - streaming、hook、compaction、受限并行工具调度和稳定结果顺序已迁入 `runAgentLoop`，旧 streaming loop 及重复工具执行逻辑已删除。
 - CLI 现在传递 audit sink、目录模式 `SessionStore` 和 resume ID；新会话返回 `AgentLoopResult.sessionId`，resume 会加载历史且 continue 不再追加空用户消息。
 - 所有正常、预算、取消、超时和异常退出都会先持久化终态；审批 fingerprint 现在绑定 principal，旧 fingerprint 按不兼容变更失效。
+
+### 2026-07-29：阶段 6 完成
+
+- 上下文压缩已接入 `runAgentLoop`，支持 token 预算、稳定切分点、摘要生成和近期消息保留。
+- provider 返回 context overflow 时会使用更保守的压缩设置重试一次，避免形成无限恢复循环。
+- compaction 的公开配置与 hook 保持可用，并由核心测试覆盖压缩与无需压缩两类路径。
 
 ### 2026-07-29：阶段 0 完成
 
