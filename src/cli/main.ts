@@ -1,3 +1,6 @@
+import { dirname, isAbsolute, resolve } from "node:path";
+import { access, writeFile } from "node:fs/promises";
+
 import { AgentSession } from "../core/agent-session.js";
 import type { PluginConfig, ResolvedAgentConfig } from "../config/config-schema.js";
 import { resolveAgentConfig } from "../config/index.js";
@@ -9,20 +12,33 @@ import { createRuntimeModelProvider } from "../models/model-runtime.js";
 import { createRuntimeStreamFn } from "../models/request-builder.js";
 import { PluginLoader, resolvePluginLoadRequest } from "../plugins/plugin-loader.js";
 import { echoTool } from "../tools/builtin/echo-tool.js";
+import { createLoadResourceTool } from "../tools/builtin/load-resource-tool.js";
+import { createMemoryDeleteTool, createMemorySaveTool, createMemorySearchTool } from "../tools/builtin/memory-tools.js";
+import { createSpawnSubagentTool } from "../tools/builtin/spawn-subagent-tool.js";
 import { readFileTool } from "../tools/builtin/read-file-tool.js";
 import { ToolRegistry } from "../tools/tool-registry.js";
 import { parseArgs } from "./parse-args.js";
 import { JsonlAuditWriter } from "../audit/jsonl-audit-writer.js";
 import type { EventSink } from "../events/event-sink.js";
 import { NoopEventSink } from "../events/event-sink.js";
-import { redactText, redactValue } from "../redaction/redactor.js";
+import { redactText } from "../redaction/redactor.js";
 import { parseSecretRef } from "../redaction/secret-ref.js";
 import { JsonlSessionStore } from "../session/jsonl-session-store.js";
-import { dirname, resolve } from "node:path";
-import { access, writeFile } from "node:fs/promises";
 import { createInitConfig, renderInitConfig, type InitProfile } from "./init-config.js";
 import { runDoctor } from "./doctor.js";
 import { createProviderDebugLogger } from "./provider-debug.js";
+import { InstructionLoader } from "../instructions/instruction-loader.js";
+import { FileMemoryStore } from "../memory/file-memory-store.js";
+import { ResourceLoader } from "../resources/resource-loader.js";
+import { ResourceRegistry } from "../resources/resource-registry.js";
+import type { ResourceVisibility } from "../resources/resource-types.js";
+import { SkillRegistry } from "../skills/skill-registry.js";
+import { AgentPresetRegistry } from "../presets/agent-preset-registry.js";
+import { McpClientManager } from "../mcp/mcp-client-manager.js";
+import type { McpServerConfig, McpToolPolicy, McpTransportKind } from "../mcp/mcp-client-manager.js";
+import { SubagentManager, filterPresetTools } from "../subagents/subagent-manager.js";
+import { assertSafeLocalPath } from "../safety/path-safety.js";
+import type { InstructionLoaderOptions, InstructionRootConfig } from "../instructions/instruction-loader.js";
 
 export interface CliDependencies {
   run?: (
@@ -40,6 +56,23 @@ export interface CliDependencies {
 }
 
 const HELP_TEXT = `Usage: mingxu [options] [prompt]\n\nCommands:\n  init                    Create a starter mingxu.config.json in the current directory\n  doctor                  Check config, env, plugins, session, and audit wiring\n  resume [sessionId]      Resume a saved session and continue with a new prompt\n  sessions                List recent sessions\n\nOptions:\n  -c, --config <path>  JSON configuration file\n  -p, --prompt <text>  Prompt to send to the agent\n  -m, --model <name>   Named model from config.models\n      --profile <name> Init profile: minimal or secure-local\n      --online         Allow doctor to perform a live provider connectivity probe\n      --debug-provider Print resolved provider config and request diagnostics to stderr\n  -h, --help           Show this help\n  -v, --version        Show the version\n`;
+
+type MutableInstructionLoaderOptions = {
+  systemPrompt?: string;
+  managed?: InstructionRootConfig;
+  user?: InstructionRootConfig;
+  project?: InstructionRootConfig;
+  local?: InstructionRootConfig;
+  session?: InstructionRootConfig;
+  autoLoadClaudeMd?: boolean;
+  maxInstructionBytes?: number;
+  maxTotalBytes?: number;
+};
+
+type McpToolPolicyInput = {
+  riskLevel?: "low" | "high" | undefined;
+  executionMode?: "sequential" | "parallel" | undefined;
+};
 
 export async function main(
   argv: readonly string[],
@@ -71,11 +104,13 @@ export async function main(
       args.debugProvider ?? dependencies.debugProvider ?? false,
     );
     const listSessions = dependencies.listSessions ?? createSessionLister(args.configPath);
+
     if (args.command === "sessions") {
       const result = await listSessions(config);
       stdout.write(`${result}\n`);
       return 0;
     }
+
     if (args.command === "doctor") {
       const result = await runDoctor({
         config,
@@ -87,6 +122,7 @@ export async function main(
       stdout.write(`${result.output}\n`);
       return result.ok ? 0 : 1;
     }
+
     const result = await run(
       config,
       args.prompt,
@@ -118,16 +154,37 @@ function createDefaultRunner(
     }
 
     const eventSink = createEventSink(config);
-    try {
+    const configDir = dirname(resolve(configFilePath));
+    const userHome = process.env.USERPROFILE ?? process.env.HOME ?? process.cwd();
+    const sessionDirectory = resolveSessionDirectory(config, configFilePath);
+    const instructionPrompt = await new InstructionLoader(
+      resolveInstructionLoaderOptions(config, configDir, userHome, sessionDirectory),
+    ).build();
     const secretRefs = collectSecretRefs(config);
     const sessionStore = await createSessionStore(config, configFilePath, sessionId);
+    const memoryManager = createConfiguredMemoryManager(config, configDir, userHome);
+    const resourceRegistry = new ResourceRegistry();
+    const resourceLoader = new ResourceLoader({
+      registry: resourceRegistry,
+      eventSink,
+      ...(sessionId !== undefined ? { sessionId } : {}),
+      runId: "cli",
+    });
+    const skillRegistry = new SkillRegistry();
+    await loadConfiguredSkills(skillRegistry, resourceRegistry, config, configDir);
+    const presetRegistry = new AgentPresetRegistry();
+    loadConfiguredPresets(presetRegistry, config);
 
-    // Startup order is intentional: aliases may only target shipped providers,
-    // while custom modules add real providers before the selected model is created.
-    const providerRegistry = registerBuiltinProviders(
-      new ProviderRegistry(),
-      config.providerAliases,
-    );
+    const toolRegistry = new ToolRegistry([
+      echoTool,
+      readFileTool,
+      createLoadResourceTool({ resourceLoader }),
+      createMemorySearchTool(memoryManager),
+      createMemorySaveTool(memoryManager),
+      createMemoryDeleteTool(memoryManager),
+    ]);
+
+    const providerRegistry = registerBuiltinProviders(new ProviderRegistry(), config.providerAliases);
     if (config.customProviderModule !== undefined) {
       await loadCustomProviderModule({
         modulePath: config.customProviderModule,
@@ -143,64 +200,115 @@ function createDefaultRunner(
       });
     }
 
-    const { adapter, selection } = providerRegistry.createFromConfig(config, modelKey, {
-      debug: providerDebug,
-    });
-    providerDebug.log("cli.selection", {
-      requestedModelKey: modelKey,
-      selectedModelKey: selection.modelKey,
-      adapterProvider: adapter.provider,
-      model: selection.model,
-      provider: selection.provider,
-    });
-    const runtimeModel = createRuntimeModelProvider(adapter, selection.model, providerDebug);
-    const runtimeStreamFn = createRuntimeStreamFn(adapter, selection.model, providerDebug);
-
-    // Built-in and plugin tools share one registry so duplicate names are caught
-    // during startup and the Agent receives one complete tool list.
-    const toolRegistry = new ToolRegistry([echoTool, readFileTool]);
-    const pluginLoader = new PluginLoader({
-      registerTool: (tool) => {
-        toolRegistry.register(tool);
-      },
-      unregisterTool: (name) => toolRegistry.unregister(name),
+    const mcpManager = new McpClientManager({
+      toolRegistry,
+      resourceRegistry,
       eventSink,
+      ...(sessionId !== undefined ? { sessionId } : {}),
+      runId: "cli",
     });
-    for (const plugin of config.plugins) {
-      const pluginSource = await resolvePluginLoadRequest({
-        path: plugin.path,
-        trust: plugin.trust,
-        configFilePath,
-      });
-      reportPluginLoad(stderr, plugin, pluginSource.resolvedPath);
-      await pluginLoader.load({
-        path: plugin.path,
-        trust: plugin.trust,
-        configFilePath,
-        ...(plugin.kind !== undefined ? { kind: plugin.kind } : {}),
-        ...(plugin.manifest !== undefined ? { manifest: plugin.manifest } : {}),
-      });
+    for (const [name, mcpServer] of Object.entries(config.mcpServers ?? {})) {
+      mcpManager.registerServer(name, normalizeMcpServerConfig(mcpServer));
     }
 
-    const session = new AgentSession({
-      model: runtimeModel,
-      streamFn: runtimeStreamFn,
-      tools: [...toolRegistry.list()],
-      ...(config.systemPrompt !== undefined ? { systemPrompt: config.systemPrompt } : {}),
-      maxIterations: config.maxIterations,
-      ...(sessionStore !== undefined ? { sessionStore } : {}),
-      ...(sessionId !== undefined ? { sessionId } : {}),
-      eventSink,
-      audit: {
-        ...(config.audit?.failClosedForHighRisk !== undefined
-          ? { failClosedForHighRisk: config.audit.failClosedForHighRisk }
-          : {}),
-      },
-      secretRefs,
-    });
-    const result = await session.prompt(agentPrompt);
-    return result.content;
+    try {
+      await mcpManager.connectAll();
+
+      const pluginLoader = new PluginLoader({
+        registerTool: (tool) => {
+          toolRegistry.register(tool);
+        },
+        unregisterTool: (name) => toolRegistry.unregister(name),
+        eventSink,
+      });
+      for (const plugin of config.plugins) {
+        const pluginSource = await resolvePluginLoadRequest({
+          path: plugin.path,
+          trust: plugin.trust,
+          configFilePath,
+        });
+        reportPluginLoad(stderr, plugin, pluginSource.resolvedPath);
+        await pluginLoader.load({
+          path: plugin.path,
+          trust: plugin.trust,
+          configFilePath,
+          ...(plugin.kind !== undefined ? { kind: plugin.kind } : {}),
+          ...(plugin.manifest !== undefined ? { manifest: plugin.manifest } : {}),
+        });
+      }
+
+      const { selection, adapter } = providerRegistry.createFromConfig(config, modelKey, {
+        debug: providerDebug,
+      });
+      providerDebug.log("cli.selection", {
+        requestedModelKey: modelKey,
+        selectedModelKey: selection.modelKey,
+        adapterProvider: adapter.provider,
+        model: selection.model,
+        provider: selection.provider,
+      });
+
+      const runtimeModel = createRuntimeModelProvider(adapter, selection.model, providerDebug);
+      const runtimeStreamFn = createRuntimeStreamFn(adapter, selection.model, providerDebug);
+      const selectedPreset = config.defaultPreset !== undefined ? presetRegistry.get(config.defaultPreset) : undefined;
+      if (config.defaultPreset !== undefined && !selectedPreset) {
+        throw new Error(`Unknown default preset: ${config.defaultPreset}`);
+      }
+
+      const subagentManager = new SubagentManager({
+        presets: presetRegistry,
+        createSession: ({ preset, sessionId: childSessionId }) => new AgentSession({
+          model: runtimeModel,
+          streamFn: runtimeStreamFn,
+          tools: filterPresetTools(preset, toolRegistry.list()),
+          ...(preset.systemPrompt !== undefined
+            ? { systemPrompt: combinePrompts(instructionPrompt, preset.systemPrompt) }
+            : { systemPrompt: instructionPrompt }),
+          maxIterations: preset.maxIterations ?? config.maxIterations,
+          ...(sessionStore !== undefined ? { sessionStore } : {}),
+          sessionId: childSessionId,
+          memoryManager,
+          eventSink,
+          audit: {
+            ...(config.audit?.failClosedForHighRisk !== undefined
+              ? { failClosedForHighRisk: config.audit.failClosedForHighRisk }
+              : {}),
+          },
+          secretRefs,
+        }),
+        ...(config.subagents !== undefined ? config.subagents : {}),
+      });
+      if (presetRegistry.list().length > 0 || config.defaultPreset !== undefined) {
+        toolRegistry.register(createSpawnSubagentTool({
+          manager: subagentManager,
+          ...(config.defaultPreset !== undefined ? { defaultPreset: config.defaultPreset } : {}),
+        }));
+      }
+
+      const sessionTools = selectedPreset ? filterPresetTools(selectedPreset, toolRegistry.list()) : [...toolRegistry.list()];
+      const sessionSystemPrompt = combinePrompts(instructionPrompt, selectedPreset?.systemPrompt);
+      const session = new AgentSession({
+        model: runtimeModel,
+        streamFn: runtimeStreamFn,
+        tools: sessionTools,
+        ...(sessionSystemPrompt ? { systemPrompt: sessionSystemPrompt } : {}),
+        maxIterations: selectedPreset?.maxIterations ?? config.maxIterations,
+        ...(sessionStore !== undefined ? { sessionStore } : {}),
+        ...(sessionId !== undefined ? { sessionId } : {}),
+        memoryManager,
+        eventSink,
+        audit: {
+          ...(config.audit?.failClosedForHighRisk !== undefined
+            ? { failClosedForHighRisk: config.audit.failClosedForHighRisk }
+            : {}),
+        },
+        secretRefs,
+      });
+
+      const result = await session.prompt(agentPrompt);
+      return result.content;
     } finally {
+      await mcpManager.close();
       await eventSink.flush?.();
       await eventSink.close?.();
     }
@@ -236,13 +344,27 @@ function createEventSink(config: ResolvedAgentConfig): EventSink {
   });
 }
 
+function collectSecretRefs(config: ResolvedAgentConfig): Readonly<Record<string, { kind: "env"; name: string }>> {
+  if (config.secrets?.allowEnv === false) {
+    return {};
+  }
+  const refs: Record<string, { kind: "env"; name: string }> = {};
+  for (const [modelName, model] of Object.entries(config.models)) {
+    if (typeof model.apiKey !== "string") continue;
+    const ref = parseSecretRef(model.apiKey);
+    if (ref) {
+      refs[`models.${modelName}.apiKey`] = ref;
+    }
+  }
+  return refs;
+}
+
 async function createSessionStore(
   config: ResolvedAgentConfig,
   configFilePath: string,
   sessionId?: string,
 ): Promise<JsonlSessionStore | undefined> {
-  const sessionDirectory = config.session?.dir
-    ?? (config.sessionFile !== undefined ? dirname(resolveSessionFilePath(configFilePath, config.sessionFile)) : undefined);
+  const sessionDirectory = resolveSessionDirectory(config, configFilePath);
   const sessionEnabled = config.session?.enabled ?? config.session?.save ?? config.sessionFile !== undefined;
   if (!sessionEnabled || !sessionDirectory) {
     return undefined;
@@ -255,24 +377,233 @@ async function createSessionStore(
   return store;
 }
 
+function resolveSessionDirectory(
+  config: ResolvedAgentConfig,
+  configFilePath: string,
+): string | undefined {
+  if (config.session?.dir !== undefined) {
+    return resolveConfiguredPath(dirname(resolve(configFilePath)), config.session.dir, "Session directory");
+  }
+  if (config.sessionFile !== undefined) {
+    return dirname(resolveSessionFilePath(configFilePath, config.sessionFile));
+  }
+  return undefined;
+}
+
 function resolveSessionFilePath(configFilePath: string, sessionFile: string): string {
   return resolve(dirname(configFilePath), sessionFile);
 }
 
-function collectSecretRefs(config: ResolvedAgentConfig): Readonly<Record<string, { kind: "env"; name: string }>> {
-  if (config.secrets?.allowEnv === false) {
-    return {};
+function resolveInstructionLoaderOptions(
+  config: ResolvedAgentConfig,
+  configDir: string,
+  userHome: string,
+  sessionDirectory?: string,
+): InstructionLoaderOptions {
+  const managedRoot = assertSafeLocalPath(getManagedInstructionRoot(userHome), "Managed instruction root");
+  const userRoot = assertSafeLocalPath(getUserInstructionRoot(userHome), "User instruction root");
+  const projectRoot = configDir;
+  const localFile = resolve(configDir, "MINGXU.local.md");
+  const sessionFile = sessionDirectory !== undefined ? resolve(sessionDirectory, "MINGXU.md") : undefined;
+  const instructions = config.instructions ?? {};
+
+  const options: MutableInstructionLoaderOptions = {};
+  if (config.systemPrompt !== undefined) options.systemPrompt = config.systemPrompt;
+
+  const managed = mergeInstructionRootConfig({ dir: managedRoot }, instructions.managed);
+  if (managed !== undefined) options.managed = managed;
+
+  const user = mergeInstructionRootConfig({ dir: userRoot }, instructions.user);
+  if (user !== undefined) options.user = user;
+
+  const project = mergeInstructionRootConfig({ dir: projectRoot }, instructions.project);
+  if (project !== undefined) options.project = project;
+
+  const local = mergeInstructionRootConfig({ file: localFile }, instructions.local);
+  if (local !== undefined) options.local = local;
+
+  const session = mergeInstructionRootConfig(
+    sessionFile !== undefined ? { file: sessionFile } : undefined,
+    instructions.session,
+  );
+  if (session !== undefined) options.session = session;
+
+  if (instructions.autoLoadClaudeMd !== undefined) options.autoLoadClaudeMd = instructions.autoLoadClaudeMd;
+  if (instructions.maxInstructionBytes !== undefined) options.maxInstructionBytes = instructions.maxInstructionBytes;
+  if (instructions.maxTotalBytes !== undefined) options.maxTotalBytes = instructions.maxTotalBytes;
+
+  return options;
+}
+
+function mergeInstructionRootConfig(
+  base: { dir?: string | undefined; file?: string | undefined; files?: readonly string[] | undefined } | undefined,
+  override: { dir?: string | undefined; file?: string | undefined; files?: readonly string[] | undefined } | undefined,
+): InstructionRootConfig | undefined {
+  if (!base && !override) return undefined;
+  const merged: InstructionRootConfig = {
+    ...(base?.dir !== undefined ? { dir: base.dir } : {}),
+    ...(override?.dir !== undefined ? { dir: override.dir } : {}),
+    ...(base?.file !== undefined ? { file: base.file } : {}),
+    ...(override?.file !== undefined ? { file: override.file } : {}),
+    ...(base?.files !== undefined || override?.files !== undefined
+      ? { files: [...new Set([...(base?.files ?? []), ...(override?.files ?? [])])] }
+      : {}),
+  };
+  return merged;
+}
+
+function createConfiguredMemoryManager(
+  config: ResolvedAgentConfig,
+  configDir: string,
+  userHome: string,
+): FileMemoryStore {
+  const memoryConfig = config.memory ?? {};
+  const defaults = {
+    managed: getManagedMemoryRoot(userHome),
+    user: getUserMemoryRoot(userHome),
+    project: configDir,
+    local: resolve(configDir, ".mingxu", "memory"),
+  } as const;
+  const readonlyScopes = new Set<"managed" | "user" | "project" | "local">(["managed"]);
+
+  for (const scope of Object.keys(defaults) as Array<keyof typeof defaults>) {
+    const scopeConfig = memoryConfig[scope];
+    if (scopeConfig?.readOnly) {
+      readonlyScopes.add(scope);
+    }
   }
-  const refs: Record<string, { kind: "env"; name: string }> = {};
-  for (const [modelName, model] of Object.entries(config.models)) {
-    if (typeof model.apiKey === "string") {
-      const ref = parseSecretRef(model.apiKey);
-      if (ref) {
-        refs[`models.${modelName}.apiKey`] = ref;
+
+  const store = new FileMemoryStore({}, { readonlyScopes: [...readonlyScopes] });
+
+  for (const scope of Object.keys(defaults) as Array<keyof typeof defaults>) {
+    const scopeConfig = memoryConfig[scope];
+    const resolvedDir = scopeConfig?.dir !== undefined
+      ? resolveConfiguredPath(configDir, scopeConfig.dir, `Memory scope ${scope}`)
+      : assertSafeLocalPath(defaults[scope], `Memory scope ${scope}`);
+    store.addScope(scope, resolvedDir);
+  }
+
+  return store;
+}
+
+async function loadConfiguredSkills(
+  skillRegistry: SkillRegistry,
+  resourceRegistry: ResourceRegistry,
+  config: ResolvedAgentConfig,
+  configDir: string,
+): Promise<void> {
+  for (const dir of config.skills?.dirs ?? []) {
+    const resolvedDir = resolveConfiguredPath(configDir, dir, "Skill directory");
+    const skills = await skillRegistry.loadDirectory(resolvedDir);
+    for (const skill of skills) {
+      if (!resourceRegistry.has("skill", skill.name)) {
+        resourceRegistry.register({
+          kind: "skill",
+          name: skill.name,
+          visibility: skill.visibility,
+          description: skill.description,
+          source: "local_file",
+          path: skill.entryPath,
+          metadata: {
+            skillName: skill.name,
+            version: skill.version,
+            manifestPath: skill.manifestPath,
+          },
+        });
+      }
+      for (const resource of skill.resources) {
+        if (!resourceRegistry.has(resource.kind, resource.name)) {
+          resourceRegistry.register(resource);
+        }
       }
     }
   }
-  return refs;
+}
+
+function loadConfiguredPresets(
+  presetRegistry: AgentPresetRegistry,
+  config: ResolvedAgentConfig,
+): void {
+  for (const preset of Object.values(config.presets ?? {})) {
+    presetRegistry.register(preset);
+  }
+}
+
+function combinePrompts(...parts: Array<string | undefined>): string {
+  return parts
+    .map((part) => part?.trim())
+    .filter((part): part is string => part !== undefined && part.length > 0)
+    .join("\n\n---\n\n");
+}
+
+function resolveConfiguredPath(baseDir: string, input: string, label: string): string {
+  const candidate = isAbsolute(input) ? input : resolve(baseDir, input);
+  return assertSafeLocalPath(candidate, label);
+}
+
+function getManagedInstructionRoot(userHome: string): string {
+  return process.env.MINGXU_SYSTEM_CONFIG_DIR
+    ?? (process.platform === "win32"
+      ? resolve(process.env.ProgramData ?? userHome, "mingxu")
+      : "/etc/mingxu");
+}
+
+function getUserInstructionRoot(userHome: string): string {
+  return process.env.MINGXU_USER_CONFIG_DIR
+    ?? (process.platform === "win32"
+      ? resolve(process.env.APPDATA ?? userHome, "mingxu")
+      : resolve(userHome, ".config", "mingxu"));
+}
+
+function getManagedMemoryRoot(userHome: string): string {
+  return process.env.MINGXU_SYSTEM_MEMORY_DIR
+    ?? (process.platform === "win32"
+      ? resolve(process.env.ProgramData ?? userHome, "mingxu", "memory")
+      : "/var/lib/mingxu");
+}
+
+function getUserMemoryRoot(userHome: string): string {
+  return process.env.MINGXU_USER_MEMORY_DIR
+    ?? (process.platform === "win32"
+      ? resolve(process.env.APPDATA ?? userHome, "mingxu", "memory")
+      : resolve(userHome, ".config", "mingxu", "memory"));
+}
+
+function normalizeMcpServerConfig(config: {
+  transport: McpTransportKind;
+  command?: string | undefined;
+  args?: readonly string[] | undefined;
+  cwd?: string | undefined;
+  url?: string | undefined;
+  env?: Readonly<Record<string, string>> | undefined;
+  headers?: Readonly<Record<string, string>> | undefined;
+  tools?: Readonly<Record<string, McpToolPolicyInput>> | undefined;
+  visibility?: ResourceVisibility | undefined;
+}): McpServerConfig {
+  return {
+    transport: config.transport,
+    ...(config.command !== undefined ? { command: config.command } : {}),
+    ...(config.args !== undefined ? { args: config.args } : {}),
+    ...(config.cwd !== undefined ? { cwd: config.cwd } : {}),
+    ...(config.url !== undefined ? { url: config.url } : {}),
+    ...(config.env !== undefined ? { env: config.env } : {}),
+    ...(config.headers !== undefined ? { headers: config.headers } : {}),
+    ...(config.tools !== undefined ? { tools: normalizeMcpToolPolicies(config.tools) } : {}),
+    ...(config.visibility !== undefined ? { visibility: config.visibility } : {}),
+  };
+}
+
+function normalizeMcpToolPolicies(
+  tools: Readonly<Record<string, McpToolPolicyInput>>,
+): Readonly<Record<string, McpToolPolicy>> {
+  const normalized: Record<string, McpToolPolicy> = {};
+  for (const [name, policy] of Object.entries(tools)) {
+    normalized[name] = {
+      ...(policy.riskLevel !== undefined ? { riskLevel: policy.riskLevel } : {}),
+      ...(policy.executionMode !== undefined ? { executionMode: policy.executionMode } : {}),
+    };
+  }
+  return normalized;
 }
 
 function reportPluginLoad(

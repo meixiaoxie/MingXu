@@ -63,6 +63,94 @@ const pluginManifestSchema = z.object({
   permissions: pluginPermissionsSchema.optional(),
 }).strict();
 
+const instructionScopeConfigSchema = z.object({
+  dir: identifierSchema.optional(),
+  file: identifierSchema.optional(),
+  files: z.array(identifierSchema).optional(),
+}).strict();
+
+const instructionConfigSchema = z.object({
+  managed: instructionScopeConfigSchema.optional(),
+  user: instructionScopeConfigSchema.optional(),
+  project: instructionScopeConfigSchema.optional(),
+  local: instructionScopeConfigSchema.optional(),
+  session: instructionScopeConfigSchema.optional(),
+  autoLoadClaudeMd: z.boolean().optional(),
+  maxInstructionBytes: z.number().int().positive().optional(),
+  maxTotalBytes: z.number().int().positive().optional(),
+}).strict();
+
+const memoryScopeConfigSchema = z.object({
+  dir: identifierSchema.optional(),
+  readOnly: z.boolean().optional(),
+}).strict();
+
+const memoryConfigSchema = z.object({
+  managed: memoryScopeConfigSchema.optional(),
+  user: memoryScopeConfigSchema.optional(),
+  project: memoryScopeConfigSchema.optional(),
+  local: memoryScopeConfigSchema.optional(),
+  maxQueryEntries: z.number().int().positive().optional(),
+  maxEntryBytes: z.number().int().positive().optional(),
+}).strict();
+
+const resourceScopeConfigSchema = z.object({
+  dir: identifierSchema.optional(),
+  files: z.array(identifierSchema).optional(),
+}).strict();
+
+const resourceConfigSchema = z.object({
+  managed: resourceScopeConfigSchema.optional(),
+  user: resourceScopeConfigSchema.optional(),
+  project: resourceScopeConfigSchema.optional(),
+  local: resourceScopeConfigSchema.optional(),
+  session: resourceScopeConfigSchema.optional(),
+  maxResourceBytes: z.number().int().positive().optional(),
+  maxRunBytes: z.number().int().positive().optional(),
+}).strict();
+
+const skillConfigSchema = z.object({
+  dirs: z.array(identifierSchema).optional(),
+  maxSkillBytes: z.number().int().positive().optional(),
+}).strict();
+
+const mcpToolConfigSchema = z.object({
+  riskLevel: z.enum(["low", "high"]).optional(),
+  executionMode: z.enum(["sequential", "parallel"]).optional(),
+}).passthrough();
+
+const mcpServerConfigSchema = z.object({
+  transport: z.enum(["stdio", "streamable_http"]),
+  command: identifierSchema.optional(),
+  args: z.array(identifierSchema).optional(),
+  url: z.string().trim().url().optional(),
+  env: z.record(z.string()).optional(),
+  headers: z.record(z.string()).optional(),
+  tools: z.record(mcpToolConfigSchema).optional(),
+}).passthrough();
+
+const presetConfigSchema = z.object({
+  version: z.literal("v1"),
+  name: identifierSchema,
+  description: z.string().min(1),
+  modelKey: identifierSchema.optional(),
+  systemPrompt: z.string().optional(),
+  skills: z.array(identifierSchema).optional(),
+  resources: z.array(identifierSchema).optional(),
+  tools: z.array(identifierSchema).optional(),
+  maxIterations: z.number().int().positive().optional(),
+  runtime: z.object({
+    maxConcurrentTools: z.number().int().positive().optional(),
+    maxDepth: z.number().int().positive().optional(),
+    maxConcurrentSubagents: z.number().int().positive().optional(),
+  }).optional(),
+}).passthrough();
+
+const subagentConfigSchema = z.object({
+  maxDepth: z.number().int().positive().optional(),
+  maxConcurrentSubagents: z.number().int().positive().optional(),
+}).strict();
+
 export type ModelConfig = z.infer<typeof modelConfigSchema>;
 export type ProviderConfig = z.infer<typeof providerConfigSchema>;
 type ProviderInput = z.infer<typeof providerEntrySchema>;
@@ -136,6 +224,14 @@ interface ParsedAgentConfigInput {
     save?: boolean | undefined;
   } | undefined;
   sessionFile?: string | undefined;
+  instructions?: z.infer<typeof instructionConfigSchema> | undefined;
+  memory?: z.infer<typeof memoryConfigSchema> | undefined;
+  resources?: z.infer<typeof resourceConfigSchema> | undefined;
+  skills?: z.infer<typeof skillConfigSchema> | undefined;
+  mcpServers?: Record<string, z.infer<typeof mcpServerConfigSchema>> | undefined;
+  presets?: Record<string, z.infer<typeof presetConfigSchema>> | undefined;
+  defaultPreset?: string | undefined;
+  subagents?: z.infer<typeof subagentConfigSchema> | undefined;
   plugins: PluginEntryInput[];
 }
 
@@ -184,6 +280,14 @@ const agentConfigInputSchema = z.object({
     save: z.boolean().optional(),
   }).optional(),
   sessionFile: identifierSchema.optional(),
+  instructions: instructionConfigSchema.optional(),
+  memory: memoryConfigSchema.optional(),
+  resources: resourceConfigSchema.optional(),
+  skills: skillConfigSchema.optional(),
+  mcpServers: z.record(mcpServerConfigSchema).optional(),
+  presets: z.record(presetConfigSchema).optional(),
+  defaultPreset: identifierSchema.optional(),
+  subagents: subagentConfigSchema.optional(),
   plugins: pluginsInputSchema,
 }).strict().superRefine((config, context) => {
   validateConfigReferences(config, context);
@@ -248,6 +352,14 @@ export interface ResolvedAgentConfig {
     readonly save?: boolean;
   };
   readonly sessionFile?: string;
+  readonly instructions?: z.infer<typeof instructionConfigSchema>;
+  readonly memory?: z.infer<typeof memoryConfigSchema>;
+  readonly resources?: z.infer<typeof resourceConfigSchema>;
+  readonly skills?: z.infer<typeof skillConfigSchema>;
+  readonly mcpServers?: Readonly<Record<string, z.infer<typeof mcpServerConfigSchema>>>;
+  readonly presets?: Readonly<Record<string, z.infer<typeof presetConfigSchema>>>;
+  readonly defaultPreset?: string;
+  readonly subagents?: z.infer<typeof subagentConfigSchema>;
   readonly plugins: readonly PluginConfig[];
 }
 
@@ -475,6 +587,14 @@ function resolveParsedConfig(config: ParsedAgentConfigInput): ResolvedAgentConfi
         }
       : {}),
     ...(config.sessionFile !== undefined ? { sessionFile: config.sessionFile } : {}),
+    ...(config.instructions !== undefined ? { instructions: config.instructions } : {}),
+    ...(config.memory !== undefined ? { memory: config.memory } : {}),
+    ...(config.resources !== undefined ? { resources: config.resources } : {}),
+    ...(config.skills !== undefined ? { skills: config.skills } : {}),
+    ...(config.mcpServers !== undefined ? { mcpServers: config.mcpServers } : {}),
+    ...(config.presets !== undefined ? { presets: config.presets } : {}),
+    ...(config.defaultPreset !== undefined ? { defaultPreset: config.defaultPreset } : {}),
+    ...(config.subagents !== undefined ? { subagents: config.subagents } : {}),
     plugins: normalizePlugins(config.plugins),
   };
 }

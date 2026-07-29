@@ -30,6 +30,7 @@ export type {
   ToolInvocation,
   ToolResult,
   Turn,
+  Tool,
 } from "./core/types.js";
 export type {
   AgentMessage,
@@ -55,17 +56,6 @@ export {
   AnthropicProvider,
   CustomProvider,
   GeminiProvider,
-  type ModelAdapter,
-  type ModelCapabilities,
-  type ModelEvent,
-  type ModelMessageRole,
-  type ModelRequest,
-  type ModelRequestMessage,
-  type ModelRequestTool,
-  type ModelResponse,
-  type ModelToolCall,
-  type ModelUsage,
-  OpenAICompatibleProvider,
   ProviderRegistry,
   buildGeminiRequest,
   createRuntimeModelProvider,
@@ -82,6 +72,16 @@ export {
   toModelOutput,
   toModelRequest,
   toOpenAICompatibleRequest,
+  type ModelAdapter,
+  type ModelCapabilities,
+  type ModelEvent,
+  type ModelMessageRole,
+  type ModelRequest,
+  type ModelRequestMessage,
+  type ModelRequestTool,
+  type ModelResponse,
+  type ModelToolCall,
+  type ModelUsage,
 } from "./models/index.js";
 export type {
   CustomProviderOptions,
@@ -93,19 +93,23 @@ export type {
   ProviderSelection,
 } from "./models/index.js";
 export {
-  createReadFileTool,
   defineTool,
-  echoTool,
   executeToolLifecycle,
-  readFileTool,
   ToolExecutor,
   ToolRegistry,
+  echoTool,
+  createLoadResourceTool,
+  createMemoryDeleteTool,
+  createMemorySaveTool,
+  createMemorySearchTool,
+  createReadFileTool,
+  readFileTool,
+  createSpawnSubagentTool,
 } from "./tools/index.js";
 export type {
   ReadFileToolOptions,
   RuntimeTool,
   RuntimeToolDefinition,
-  Tool,
 } from "./tools/index.js";
 export type { ToolExecutionRequest } from "./tools/tool-registry.js";
 export {
@@ -120,6 +124,7 @@ export type {
   SessionDocument,
   SessionRecord,
   SessionRunRecord,
+  SessionRuntimeSnapshot,
   SessionStore,
   SessionSummary,
   SessionToolInvocationRecord,
@@ -173,13 +178,57 @@ export type {
   MemoryStore,
 } from "./memory/index.js";
 export { FileMemoryStore, createAutoMemoryManager } from "./memory/index.js";
+export {
+  InstructionLoader,
+  createDefaultInstructionPrompt,
+  resolveInstructionPath,
+} from "./instructions/index.js";
 export type {
-  AgentHooks,
-  BeforeToolCallResult,
-  AfterToolCallResult,
-  SessionStartResult,
-  SessionEndResult,
-  PreCompactResult,
-  PostCompactResult,
-  UserPromptSubmitResult,
-} from "./hooks/hook-types.js";
+  InstructionLoaderOptions,
+  InstructionRootConfig,
+  InstructionSource,
+  InstructionScope,
+} from "./instructions/index.js";
+export {
+  ResourceRegistry,
+  ResourceLoader,
+} from "./resources/index.js";
+export type {
+  ResourceContent,
+  ResourceDescriptor,
+  ResourceKind,
+  ResourceVisibility,
+  ResolvedResource,
+} from "./resources/index.js";
+export {
+  SkillRegistry,
+  skillManifestSchema,
+} from "./skills/index.js";
+export type {
+  SkillDescriptor,
+  SkillManifestV1,
+} from "./skills/index.js";
+export {
+  AgentPresetRegistry,
+  agentPresetSchemaV1,
+} from "./presets/index.js";
+export type { AgentPresetV1 } from "./presets/index.js";
+export {
+  McpClientManager,
+} from "./mcp/index.js";
+export type {
+  McpClientManagerOptions,
+  McpServerConfig,
+  McpToolPolicy,
+  McpTransportKind,
+} from "./mcp/index.js";
+export {
+  SubagentManager,
+  filterPresetTools,
+} from "./subagents/index.js";
+export type {
+  CreateSubagentSessionRequest,
+  SubagentDependencies,
+  SubagentRuntimeOptions,
+  SubagentSpawnRequest,
+} from "./subagents/index.js";

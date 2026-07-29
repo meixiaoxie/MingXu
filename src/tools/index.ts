@@ -9,3 +9,6 @@ export type { ToolExecutionRequest } from "./tool-registry.js";
 export { echoTool } from "./builtin/echo-tool.js";
 export { createReadFileTool, readFileTool } from "./builtin/read-file-tool.js";
 export type { ReadFileToolOptions } from "./builtin/read-file-tool.js";
+export { createLoadResourceTool } from "./builtin/load-resource-tool.js";
+export { createMemoryDeleteTool, createMemorySaveTool, createMemorySearchTool } from "./builtin/memory-tools.js";
+export { createSpawnSubagentTool } from "./builtin/spawn-subagent-tool.js";

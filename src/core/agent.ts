@@ -11,7 +11,7 @@ import type {
   ModelProvider,
 } from "./types.js";
 import type { AgentEventListener, AgentEvent } from "../events/types.js";
-import type { MemoryQuery, MemoryEntry } from "../memory/memory-scope.js";
+import type { MemoryEntry, MemoryQuery, MemoryScope } from "../memory/memory-scope.js";
 import type { AgentHooks } from "../hooks/hook-types.js";
 
 /** Agent 内用的轻量记忆管理器接口 */
@@ -235,20 +235,23 @@ async function loadMemory(
   mgr: AgentMemoryManager | undefined,
 ): Promise<AgentMessage[]> {
   if (!mgr) return [];
-  try {
-    const project = await mgr.query({ scope: "project" });
-    const user = await mgr.query({ scope: "user" });
-    return [...project, ...user].map((entry) => ({
-      id: createRuntimeId("memory"),
-      role: "system" as const,
-      content: entry.content,
-      createdAt: entry.updatedAt,
-      visibleToModel: true,
-      metadata: { source: "memory", scope: entry.scope, key: entry.key },
-    }));
-  } catch {
-    return [];
+  const orderedScopes: MemoryScope[] = ["managed", "user", "project", "local"];
+  const entries: MemoryEntry[] = [];
+  for (const scope of orderedScopes) {
+    try {
+      entries.push(...await mgr.query({ scope }));
+    } catch {
+      continue;
+    }
   }
+  return entries.map((entry) => ({
+    id: createRuntimeId("memory"),
+    role: "system" as const,
+    content: entry.content,
+    createdAt: entry.updatedAt,
+    visibleToModel: true,
+    metadata: { source: "memory", scope: entry.scope, key: entry.key },
+  }));
 }
 
 async function runSessionStartHook(

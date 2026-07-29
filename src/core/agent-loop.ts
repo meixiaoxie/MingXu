@@ -28,6 +28,7 @@ import {
   resolveRuntimeOptions,
 } from "./runtime-limits.js";
 import { createRuntimeEvent } from "../events/runtime-events.js";
+import type { RuntimeEvent } from "../events/types.js";
 import { redactText, redactValue } from "../redaction/redactor.js";
 import { createAllowAllRule, createDefaultNonInteractiveAskRule, createReadFileRootRule } from "../policy/policy-defaults.js";
 import { BasicPolicyEngine } from "../policy/policy-engine.js";
@@ -116,13 +117,14 @@ export async function runAgentLoop(
     context: RunContext,
     source: "core" | "model" | "tool" | "memory",
   ): Promise<void> => {
-    await eventSink?.emit(createRuntimeEvent(eventType, payload, {
+    const runtimeEvent = createRuntimeEvent(eventType as never, payload as never, {
       runId: context.runId,
       ...(context.sessionId !== undefined ? { sessionId: context.sessionId } : {}),
       ...(context.traceId !== undefined ? { traceId: context.traceId } : {}),
       sequence: ++eventSequence,
       source,
-    }));
+    }) as RuntimeEvent;
+    await eventSink?.emit(runtimeEvent);
   };
 
   const finish = async (completion: RunCompletion, content: string): Promise<AgentLoopResult> => {
