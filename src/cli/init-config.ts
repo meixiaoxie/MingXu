@@ -1,4 +1,5 @@
 import type { AgentConfigInput } from "../config/config-schema.js";
+import { MINGXU_IDENTITY_PROMPT } from "./identity.js";
 
 export type InitProfile = "minimal" | "secure-local";
 
@@ -11,7 +12,7 @@ export type InitProfile = "minimal" | "secure-local";
 export function createInitConfig(profile: InitProfile): AgentConfigInput {
   const base: AgentConfigInput = {
     name: "mingxu",
-    systemPrompt: "You are a helpful agent.",
+    systemPrompt: MINGXU_IDENTITY_PROMPT,
     defaultModel: "primary",
     models: {
       primary: {

@@ -1,6 +1,6 @@
 {
   "name": "mingxu",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "description": "A lightweight TypeScript agent runtime and local CLI skeleton.",
@@ -43,6 +43,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "string-width": "^8.2.2",
     "zod": "^3.25.67"
   },
   "devDependencies": {

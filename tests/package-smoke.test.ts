@@ -201,7 +201,7 @@ describe("packed CLI and public API smoke path", () => {
 
     const versionResult = await runNode([entryPath, "--version"], installDirectory);
     expect(versionResult.exitCode, versionResult.stderr).toBe(0);
-    expect(versionResult.stdout.trim()).toBe("0.1.0");
+    expect(versionResult.stdout.trim()).toBe("0.2.1");
   }, 20_000);
 
   it("loads the installed public API", async () => {

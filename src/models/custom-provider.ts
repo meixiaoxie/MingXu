@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { normalizeModelError } from "./execution-errors.js";
 import { defaultModelCapabilities } from "./model-capabilities.js";
+import { resolveProviderSecret } from "./provider-env.js";
 import type { ModelRequest, ModelResponse, ModelToolCall } from "./model-protocol.js";
 import type { ModelExecutionOptions, ModelAdapter } from "./provider-registry.js";
 
@@ -52,7 +53,7 @@ export class CustomProvider implements ModelAdapter {
   constructor(options: CustomProviderOptions) {
     const parsed = customProviderOptionsSchema.parse(options);
     this.#baseUrl = validateCustomEndpoint(parsed.baseUrl);
-    this.#apiKey = parsed.apiKey;
+    this.#apiKey = resolveProviderSecret(parsed.apiKey, "CUSTOM_API_KEY");
   }
 
   async generate(request: ModelRequest, options: ModelExecutionOptions = {}): Promise<ModelResponse> {

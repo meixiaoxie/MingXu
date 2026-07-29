@@ -42,6 +42,9 @@ import { SubagentManager, filterPresetTools } from "../subagents/subagent-manage
 import { assertSafeLocalPath } from "../safety/path-safety.js";
 import type { InstructionLoaderOptions, InstructionRootConfig } from "../instructions/instruction-loader.js";
 import type { AgentLoopResult } from "../core/types.js";
+import { MINGXU_IDENTITY_PROMPT } from "./identity.js";
+import { ChatInputController } from "./chat-input.js";
+import { findChatCommand, formatChatHelp, suggestChatCommands } from "./chat-commands.js";
 
 export interface CliDependencies {
   run?: (
@@ -156,6 +159,7 @@ export async function main(
       || (args.command === undefined && !args.prompt && process.stdin.isTTY && process.stdout.isTTY)) {
       const chatResult = await runChatLoop({
         config,
+        configFilePath,
         run,
         listSessions,
         stdout,
@@ -198,6 +202,7 @@ function normalizeRunResult(result: string | void | AgentLoopResult | undefined)
 
 async function runChatLoop(options: {
   config: ResolvedAgentConfig;
+  configFilePath: string;
   run: NonNullable<CliDependencies["run"]>;
   listSessions: NonNullable<CliDependencies["listSessions"]>;
   stdout: Pick<NodeJS.WriteStream, "write">;
@@ -206,12 +211,26 @@ async function runChatLoop(options: {
   initialPrompt?: string;
   resumeSessionId?: string;
 }): Promise<{ exitCode: number }> {
-  const input = process.stdin;
-  const output = process.stdout;
-  const rl = createInterface({ input, output });
-  let currentSessionId = options.resumeSessionId;
+  void options.run;
+  void options.listSessions;
+  const runtime = await createCliRuntimeContext({
+    config: options.config,
+    configFilePath: options.configFilePath,
+    stderr: options.stderr,
+  });
+  const controller = new ChatInputController({
+    input: process.stdin,
+    output: process.stdout,
+    enableRawMode: true,
+  });
   let currentModelKey = options.modelKey;
+  let currentSessionId = options.resumeSessionId;
+  let currentSession = runtime.createSession({
+    ...(currentModelKey !== undefined ? { modelKey: currentModelKey } : {}),
+    ...(currentSessionId !== undefined ? { sessionId: currentSessionId } : {}),
+  });
   const pendingInputs: string[] = [];
+  let exitRequested = false;
 
   try {
     if (options.initialPrompt?.trim()) {
@@ -219,72 +238,52 @@ async function runChatLoop(options: {
     }
 
     options.stdout.write("mingxu chat. Type /help for commands.\n");
-    while (true) {
-      const inputLine = pendingInputs.shift() ?? await rl.question("> ");
+    while (!exitRequested) {
+      const inputLine = pendingInputs.shift() ?? await controller.readLine("> ");
+      if (inputLine === null) {
+        break;
+      }
+
       const trimmed = inputLine.trim();
       if (!trimmed) {
         continue;
       }
-      if (trimmed === "/exit" || trimmed === "/quit") {
-        return { exitCode: 0 };
-      }
-      if (trimmed === "/help") {
-        options.stdout.write([
-          "Commands:",
-          "/help",
-          "/exit",
-          "/sessions",
-          "/session",
-          "/new",
-          "/clear",
-          "/model <key>",
-          "/resume <id>",
-        ].join("\n") + "\n");
-        continue;
-      }
-      if (trimmed === "/sessions") {
-        options.stdout.write(`${await options.listSessions(options.config)}\n`);
-        continue;
-      }
-      if (trimmed === "/session") {
-        options.stdout.write(`${currentSessionId ?? "no active session"}\n`);
-        continue;
-      }
-      if (trimmed === "/new") {
-        currentSessionId = undefined;
-        options.stdout.write("Started a new session.\n");
-        continue;
-      }
-      if (trimmed === "/clear") {
-        options.stdout.write("\u001b[2J\u001b[0f");
-        continue;
-      }
-      if (trimmed.startsWith("/model ")) {
-        currentModelKey = trimmed.slice("/model ".length).trim() || undefined;
-        options.stdout.write(`Model set to ${currentModelKey ?? "default"}.\n`);
-        continue;
-      }
-      if (trimmed.startsWith("/resume ")) {
-        currentSessionId = trimmed.slice("/resume ".length).trim() || undefined;
-        options.stdout.write(`Resuming ${currentSessionId ?? "latest"}.\n`);
+
+      if (trimmed.startsWith("/")) {
+        const handled = await handleChatCommand({
+          runtime,
+          controller,
+          config: options.config,
+          stdout: options.stdout,
+          stderr: options.stderr,
+          ...(currentModelKey !== undefined ? { currentModelKey } : {}),
+          ...(currentSessionId !== undefined ? { currentSessionId } : {}),
+          currentSession,
+          setCurrentModelKey: (value) => { currentModelKey = value; },
+          setCurrentSessionId: (value) => { currentSessionId = value; },
+          setCurrentSession: (value) => { currentSession = value; },
+          command: trimmed,
+        });
+        if (handled.exit) {
+          exitRequested = true;
+        }
         continue;
       }
 
-      const result = normalizeRunResult(await options.run(
-        options.config,
-        trimmed,
-        currentModelKey,
-        currentSessionId,
-      ));
-      if (result?.content) {
-        options.stdout.write(`${result.content}\n`);
-      }
-      if (result?.sessionId) {
+      const result = await runChatPrompt({
+        session: currentSession,
+        prompt: trimmed,
+        stdout: options.stdout,
+        stderr: options.stderr,
+      });
+      if (result.sessionId) {
         currentSessionId = result.sessionId;
       }
     }
+    return { exitCode: 0 };
   } finally {
-    rl.close();
+    controller.close();
+    await runtime.close();
   }
 }
 
@@ -296,6 +295,7 @@ async function runFirstLaunchWizard(stdout: Pick<NodeJS.WriteStream, "write">): 
     const apiKeyEnv = (await rl.question(`Environment variable [${defaultApiKeyEnv(provider)}]: `)).trim() || defaultApiKeyEnv(provider);
     const profile = {
       name: "mingxu",
+      systemPrompt: MINGXU_IDENTITY_PROMPT,
       defaultModel: "primary",
       models: {
         primary: {
@@ -346,8 +346,8 @@ function createDefaultRunner(
       throw new Error("A prompt is required");
     }
 
-    const eventSink = createEventSink(config);
     const configDir = dirname(resolve(configFilePath));
+    const eventSink = createEventSink(config, configDir);
     const userHome = process.env.USERPROFILE ?? process.env.HOME ?? process.cwd();
     const sessionDirectory = resolveSessionDirectory(config, configFilePath);
     const instructionPrompt = await new InstructionLoader(
@@ -508,6 +508,433 @@ function createDefaultRunner(
   };
 }
 
+interface CliRuntimeContext {
+  createSession(request?: {
+    readonly modelKey?: string;
+    readonly sessionId?: string;
+    readonly preset?: import("../presets/agent-preset-registry.js").AgentPresetV1;
+  }): AgentSession;
+  listSessions(): Promise<string>;
+  listRecentSessions(limit?: number): Promise<readonly { sessionId: string; state: string; updatedAt: string; lastRunState?: string; title?: string }[]>;
+  close(): Promise<void>;
+  readonly config: ResolvedAgentConfig;
+  readonly configFilePath: string;
+}
+
+async function createCliRuntimeContext(options: {
+  readonly config: ResolvedAgentConfig;
+  readonly configFilePath: string;
+  readonly stderr: Pick<NodeJS.WriteStream, "write">;
+  readonly debugProvider?: boolean;
+}): Promise<CliRuntimeContext> {
+  const providerDebug = createProviderDebugLogger({
+    enabled: options.debugProvider || process.env.MINGXU_DEBUG_PROVIDER === "1",
+    sink: options.stderr,
+  });
+
+  const configDir = dirname(resolve(options.configFilePath));
+  const eventSink = createEventSink(options.config, configDir);
+  const userHome = process.env.USERPROFILE ?? process.env.HOME ?? process.cwd();
+  const sessionDirectory = resolveSessionDirectory(options.config, options.configFilePath);
+  const instructionPrompt = await new InstructionLoader(
+    resolveInstructionLoaderOptions(options.config, configDir, userHome, sessionDirectory),
+  ).build();
+  const secretRefs = collectSecretRefs(options.config);
+  const sessionStore = await createSessionStore(options.config, options.configFilePath);
+  const memoryManager = createConfiguredMemoryManager(options.config, configDir, userHome);
+  const resourceRegistry = new ResourceRegistry();
+  const skillRegistry = new SkillRegistry();
+  await loadConfiguredSkills(skillRegistry, resourceRegistry, options.config, configDir);
+  const presetRegistry = new AgentPresetRegistry();
+  loadConfiguredPresets(presetRegistry, options.config);
+
+  const toolRegistry = new ToolRegistry([
+    echoTool,
+    readFileTool,
+    createMemorySearchTool(memoryManager),
+    createMemorySaveTool(memoryManager),
+    createMemoryDeleteTool(memoryManager),
+  ]);
+
+  const providerRegistry = registerBuiltinProviders(new ProviderRegistry(), options.config.providerAliases);
+  if (options.config.customProviderModule !== undefined) {
+    await loadCustomProviderModule({
+      modulePath: options.config.customProviderModule,
+      configFilePath: options.configFilePath,
+      registry: providerRegistry,
+    });
+  }
+  for (const provider of Object.values(options.config.customProviders)) {
+    await loadCustomProviderModule({
+      modulePath: provider.module,
+      configFilePath: options.configFilePath,
+      registry: providerRegistry,
+    });
+  }
+
+  const mcpManager = new McpClientManager({
+    toolRegistry,
+    resourceRegistry,
+    eventSink,
+    runId: "cli",
+  });
+  for (const [name, mcpServer] of Object.entries(options.config.mcpServers ?? {})) {
+    mcpManager.registerServer(name, normalizeMcpServerConfig(mcpServer));
+  }
+  await mcpManager.connectAll();
+
+  const selectedDefaultPreset = options.config.defaultPreset !== undefined
+    ? presetRegistry.get(options.config.defaultPreset)
+    : undefined;
+  if (options.config.defaultPreset !== undefined && !selectedDefaultPreset) {
+    throw new Error(`Unknown default preset: ${options.config.defaultPreset}`);
+  }
+
+  let runtimeContext: CliRuntimeContext | undefined;
+  const subagentManager = new SubagentManager({
+    presets: presetRegistry,
+    createSession: ({ preset, sessionId: childSessionId }) => {
+      if (!runtimeContext) {
+        throw new Error("Subagent runtime is not ready");
+      }
+      return runtimeContext.createSession({
+        sessionId: childSessionId,
+        preset,
+        ...(preset.modelKey !== undefined ? { modelKey: preset.modelKey } : {}),
+      });
+    },
+    ...(options.config.subagents !== undefined ? options.config.subagents : {}),
+  });
+  if (presetRegistry.list().length > 0 || options.config.defaultPreset !== undefined) {
+    toolRegistry.register(createSpawnSubagentTool({
+      manager: subagentManager,
+      ...(options.config.defaultPreset !== undefined ? { defaultPreset: options.config.defaultPreset } : {}),
+    }));
+  }
+
+  const createSession = (request: {
+    readonly modelKey?: string;
+    readonly sessionId?: string;
+    readonly preset?: import("../presets/agent-preset-registry.js").AgentPresetV1;
+  } = {}): AgentSession => {
+    const preset = request.preset ?? selectedDefaultPreset;
+    const modelKey = request.modelKey ?? preset?.modelKey ?? options.config.defaultModel;
+    const { selection, adapter } = providerRegistry.createFromConfig(options.config, modelKey, {
+      debug: providerDebug,
+    });
+    providerDebug.log("cli.selection", {
+      requestedModelKey: modelKey,
+      selectedModelKey: selection.modelKey,
+      adapterProvider: adapter.provider,
+      model: selection.model,
+      provider: selection.provider,
+    });
+
+    const runtimeModel = createRuntimeModelProvider(adapter, selection.model, providerDebug);
+    const runtimeStreamFn = createRuntimeStreamFn(adapter, selection.model, providerDebug);
+    const resourceLoader = new ResourceLoader({
+      registry: resourceRegistry,
+      eventSink,
+      ...(request.sessionId !== undefined ? { sessionId: request.sessionId } : {}),
+      runId: "cli",
+      ...(options.config.resources?.maxResourceBytes !== undefined ? { maxResourceBytes: options.config.resources.maxResourceBytes } : {}),
+      ...(options.config.resources?.maxRunBytes !== undefined ? { maxRunBytes: options.config.resources.maxRunBytes } : {}),
+    });
+    const runtimeTools = [...toolRegistry.list()];
+    if (resourceRegistry.list().length > 0) {
+      runtimeTools.push(createLoadResourceTool({ resourceLoader }));
+    }
+    const sessionTools = preset ? filterPresetTools(preset, runtimeTools) : runtimeTools;
+    const sessionSystemPrompt = combinePrompts(instructionPrompt, preset?.systemPrompt);
+
+    return new AgentSession({
+      model: runtimeModel,
+      streamFn: runtimeStreamFn,
+      tools: sessionTools,
+      ...(sessionSystemPrompt ? { systemPrompt: sessionSystemPrompt } : {}),
+      maxIterations: preset?.maxIterations ?? options.config.maxIterations,
+      ...(sessionStore !== undefined ? { sessionStore } : {}),
+      ...(request.sessionId !== undefined ? { sessionId: request.sessionId } : {}),
+      memoryManager,
+      eventSink,
+      audit: {
+        ...(options.config.audit?.failClosedForHighRisk !== undefined
+          ? { failClosedForHighRisk: options.config.audit.failClosedForHighRisk }
+          : {}),
+      },
+      secretRefs,
+    });
+  };
+
+  runtimeContext = {
+    config: options.config,
+    configFilePath: options.configFilePath,
+    createSession,
+    listSessions: async () => {
+      if (!sessionStore) {
+        return "Session storage is not enabled.";
+      }
+      const sessions = await sessionStore.listRecentSessions();
+      if (sessions.length === 0) {
+        return "No saved sessions.";
+      }
+      return sessions
+        .map((session) => `${session.sessionId}\t${session.state}\t${session.updatedAt}${session.lastRunState ? `\t${session.lastRunState}` : ""}`)
+        .join("\n");
+    },
+    listRecentSessions: async (limit = 10) => {
+      if (!sessionStore) {
+        return [];
+      }
+      return sessionStore.listRecentSessions(limit);
+    },
+    close: async () => {
+      await mcpManager.close();
+      await eventSink.flush?.();
+      await eventSink.close?.();
+    },
+  };
+
+  return runtimeContext;
+}
+
+async function handleChatCommand(options: {
+  readonly runtime: CliRuntimeContext;
+  readonly controller: ChatInputController;
+  readonly config: ResolvedAgentConfig;
+  readonly stdout: Pick<NodeJS.WriteStream, "write">;
+  readonly stderr: Pick<NodeJS.WriteStream, "write">;
+  readonly currentModelKey?: string;
+  readonly currentSessionId?: string;
+  readonly currentSession: AgentSession;
+  readonly setCurrentModelKey: (value: string | undefined) => void;
+  readonly setCurrentSessionId: (value: string | undefined) => void;
+  readonly setCurrentSession: (session: AgentSession) => void;
+  readonly command: string;
+}): Promise<{ exit: boolean }> {
+  const parsed = parseSlashCommand(options.command);
+  if (!parsed) {
+    options.stderr.write(`Error: Unknown command ${redactText(options.command)}\n`);
+    return { exit: false };
+  }
+
+  const command = findChatCommand(parsed.name);
+  const commandName = command?.name ?? parsed.name;
+
+  switch (commandName) {
+    case "help":
+      options.stdout.write(`${formatChatHelp()}\n`);
+      return { exit: false };
+    case "status": {
+      const tools = options.currentSession.options.tools ?? [];
+      options.stdout.write(
+        [
+          `session: ${options.currentSessionId ?? "new"}`,
+          `model: ${options.currentModelKey ?? options.config.defaultModel}`,
+          `tools: ${tools.length}`,
+        ].join("\n") + "\n",
+      );
+      return { exit: false };
+    }
+    case "model": {
+      const modelKeys = Object.keys(options.config.models);
+      if (parsed.args) {
+        if (!options.config.models[parsed.args]) {
+          options.stderr.write(`Error: Unknown model key: ${redactText(parsed.args)}\n`);
+          return { exit: false };
+        }
+        options.setCurrentModelKey(parsed.args);
+        options.setCurrentSession(options.runtime.createSession({
+          modelKey: parsed.args,
+          ...(options.currentSessionId !== undefined ? { sessionId: options.currentSessionId } : {}),
+        }));
+        options.stdout.write(`Model set to ${parsed.args}.\n`);
+        return { exit: false };
+      }
+
+      options.stdout.write(
+        ["Available models:", ...modelKeys.map((key, index) => `${index + 1}. ${key}`)].join("\n") + "\n",
+      );
+      const selection = (await options.controller.readLine("Select model> "))?.trim();
+      if (!selection) {
+        return { exit: false };
+      }
+      const chosen = resolveIndexedChoice(selection, modelKeys) ?? selection;
+      if (!options.config.models[chosen]) {
+        options.stderr.write(`Error: Unknown model key: ${redactText(chosen)}\n`);
+        return { exit: false };
+      }
+      options.setCurrentModelKey(chosen);
+      options.setCurrentSession(options.runtime.createSession({
+        modelKey: chosen,
+        ...(options.currentSessionId !== undefined ? { sessionId: options.currentSessionId } : {}),
+      }));
+      options.stdout.write(`Model set to ${chosen}.\n`);
+      return { exit: false };
+    }
+    case "tools": {
+      const activeTools = options.currentSession.options.tools ?? [];
+      options.stdout.write(
+        activeTools.length > 0
+          ? activeTools.map((tool) => `${tool.name}\t${tool.description}`).join("\n") + "\n"
+          : "No tools are currently registered.\n",
+      );
+      return { exit: false };
+    }
+    case "session":
+      options.stdout.write(`${options.currentSessionId ?? "no active session"}\n`);
+      return { exit: false };
+    case "sessions":
+      options.stdout.write(`${await options.runtime.listSessions()}\n`);
+      return { exit: false };
+    case "resume": {
+      if (parsed.args) {
+        options.setCurrentSessionId(parsed.args);
+        options.setCurrentSession(options.runtime.createSession({
+          ...(options.currentModelKey !== undefined ? { modelKey: options.currentModelKey } : {}),
+          sessionId: parsed.args,
+        }));
+        options.stdout.write(`Resuming ${parsed.args}.\n`);
+        return { exit: false };
+      }
+
+      const recentSessions = await options.runtime.listRecentSessions(10);
+      if (recentSessions.length === 0) {
+        options.stdout.write("No saved sessions.\n");
+        return { exit: false };
+      }
+      options.stdout.write(
+        ["Recent sessions:", ...recentSessions.map((session, index) => `${index + 1}. ${session.sessionId}\t${session.updatedAt}\t${session.state}`)].join("\n") + "\n",
+      );
+      const selection = (await options.controller.readLine("Select session> "))?.trim();
+      if (!selection) {
+        return { exit: false };
+      }
+      const sessionIds = recentSessions.map((session) => session.sessionId);
+      const chosen = resolveIndexedChoice(selection, sessionIds) ?? selection;
+      options.setCurrentSessionId(chosen);
+      options.setCurrentSession(options.runtime.createSession({
+        ...(options.currentModelKey !== undefined ? { modelKey: options.currentModelKey } : {}),
+        sessionId: chosen,
+      }));
+      options.stdout.write(`Resuming ${chosen}.\n`);
+      return { exit: false };
+    }
+    case "new":
+      options.setCurrentSessionId(undefined);
+      options.setCurrentSession(options.runtime.createSession({
+        ...(options.currentModelKey !== undefined ? { modelKey: options.currentModelKey } : {}),
+      }));
+      options.stdout.write("Started a new session.\n");
+      return { exit: false };
+    case "clear":
+      options.stdout.write("\u001b[2J\u001b[0f");
+      return { exit: false };
+    case "exit":
+    case "quit":
+      return { exit: true };
+    default: {
+      const suggestions = suggestChatCommands(parsed.name);
+      if (suggestions.length > 0) {
+        options.stderr.write(`Error: Unknown command /${parsed.name}. Did you mean ${suggestions.map((command) => `/${command.name}`).join(", ")}?\n`);
+      } else {
+        options.stderr.write(`Error: Unknown command /${parsed.name}\n`);
+      }
+      return { exit: false };
+    }
+  }
+}
+
+function parseSlashCommand(raw: string): { name: string; args: string } | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("/")) {
+    return undefined;
+  }
+  const body = trimmed.slice(1).trim();
+  if (!body) {
+    return undefined;
+  }
+  const firstSpace = body.indexOf(" ");
+  return {
+    name: (firstSpace === -1 ? body : body.slice(0, firstSpace)).trim(),
+    args: firstSpace === -1 ? "" : body.slice(firstSpace + 1).trim(),
+  };
+}
+
+function resolveIndexedChoice(choice: string, values: readonly string[]): string | undefined {
+  const index = Number.parseInt(choice, 10);
+  if (Number.isInteger(index) && index >= 1 && index <= values.length) {
+    return values[index - 1];
+  }
+  return undefined;
+}
+
+async function runChatPrompt(options: {
+  readonly session: AgentSession;
+  readonly prompt: string;
+  readonly stdout: Pick<NodeJS.WriteStream, "write">;
+  readonly stderr: Pick<NodeJS.WriteStream, "write">;
+}): Promise<{ sessionId?: string }> {
+  let messageActive = false;
+  let messageHadText = false;
+  const unsubscribe = options.session.subscribe((event) => {
+    if (event.type === "message_start") {
+      messageActive = true;
+      messageHadText = false;
+      return;
+    }
+    if (event.type === "message_update") {
+      const delta = event.delta as { type?: string; text?: string } | undefined;
+      if (delta?.type === "text_delta" && typeof delta.text === "string") {
+        options.stdout.write(delta.text);
+        messageHadText = true;
+      }
+      return;
+    }
+    if (event.type === "tool_execution_start") {
+      if (messageActive && messageHadText) {
+        options.stdout.write("\n");
+      }
+      messageActive = false;
+      messageHadText = false;
+      options.stderr.write(`[tool] ${event.toolCall.name}\n`);
+      return;
+    }
+    if (event.type === "tool_execution_end") {
+      options.stderr.write(`[tool] ${event.toolCall.name} done\n`);
+      return;
+    }
+    if (event.type === "error") {
+      if (messageHadText) {
+        options.stdout.write("\n");
+      }
+      options.stderr.write(`Error: ${redactText(event.error)}\n`);
+    }
+  });
+
+  const handleSigint = () => {
+    options.session.abort("Interrupted by user");
+  };
+  process.once("SIGINT", handleSigint);
+
+  try {
+    const result = await options.session.prompt(options.prompt);
+    if (!messageHadText && result.content) {
+      options.stdout.write(`${result.content}\n`);
+    } else if (messageHadText) {
+      options.stdout.write("\n");
+    }
+    return result.sessionId ? { sessionId: result.sessionId } : {};
+  } catch (error) {
+    const message = redactText(error instanceof Error ? error.message : String(error));
+    options.stderr.write(`Error: ${message}\n`);
+    return {};
+  } finally {
+    process.off("SIGINT", handleSigint);
+    unsubscribe();
+  }
+}
+
 function createSessionLister(configFilePath: string): NonNullable<CliDependencies["listSessions"]> {
   return async (config) => {
     const sessionStore = await createSessionStore(config, configFilePath);
@@ -524,11 +951,11 @@ function createSessionLister(configFilePath: string): NonNullable<CliDependencie
   };
 }
 
-function createEventSink(config: ResolvedAgentConfig): EventSink {
+function createEventSink(config: ResolvedAgentConfig, configDir: string): EventSink {
   if (!config.audit?.enabled || !config.audit.file) {
     return new NoopEventSink();
   }
-  return new JsonlAuditWriter(config.audit.file, {
+  return new JsonlAuditWriter(resolveConfiguredPath(configDir, config.audit.file, "Audit file"), {
     ...(config.audit.maxBytes !== undefined ? { maxBytes: config.audit.maxBytes } : {}),
     ...(config.audit.maxFiles !== undefined ? { maxFiles: config.audit.maxFiles } : {}),
     ...(config.audit.failClosedForHighRisk !== undefined
@@ -601,7 +1028,9 @@ function resolveInstructionLoaderOptions(
   const instructions = config.instructions ?? {};
 
   const options: MutableInstructionLoaderOptions = {};
-  if (config.systemPrompt !== undefined) options.systemPrompt = config.systemPrompt;
+  options.systemPrompt = config.systemPrompt !== undefined
+    ? combinePrompts(MINGXU_IDENTITY_PROMPT, config.systemPrompt)
+    : MINGXU_IDENTITY_PROMPT;
 
   const managed = mergeInstructionRootConfig({ dir: managedRoot }, instructions.managed);
   if (managed !== undefined) options.managed = managed;

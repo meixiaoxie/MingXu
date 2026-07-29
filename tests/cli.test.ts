@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { main } from "../src/cli/main.js";
+import { MINGXU_IDENTITY_PROMPT } from "../src/cli/identity.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -17,6 +18,60 @@ function createResponse(body: unknown, status = 200) {
     status,
     json: async () => body,
   };
+}
+
+function createStreamResponse(payload: string, status = 200) {
+  const encoder = new TextEncoder();
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    body: new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(payload));
+        controller.close();
+      },
+    }),
+  };
+}
+
+function createOpenAiSseResponse(text: string, finishReason = "stop") {
+  return createStreamResponse(`data: ${JSON.stringify({
+    choices: [{ delta: { content: text }, finish_reason: finishReason }],
+  })}\n\ndata: [DONE]\n\n`);
+}
+
+function createAnthropicSseResponse(text: string, stopReason = "end_turn") {
+  return createStreamResponse([
+    `data: ${JSON.stringify({ type: "message_start" })}\n\n`,
+    `data: ${JSON.stringify({
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "text" },
+    })}\n\n`,
+    `data: ${JSON.stringify({
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "text_delta", text },
+    })}\n\n`,
+    `data: ${JSON.stringify({
+      type: "content_block_stop",
+      index: 0,
+    })}\n\n`,
+    `data: ${JSON.stringify({
+      type: "message_delta",
+      delta: { stop_reason: stopReason },
+    })}\n\n`,
+    `data: ${JSON.stringify({ type: "message_stop" })}\n\n`,
+  ].join(""));
+}
+
+function expectManagedSystemPrompt(system: unknown, ...fragments: string[]): void {
+  expect(typeof system).toBe("string");
+  const systemPrompt = system as string;
+  expect(systemPrompt).toContain(MINGXU_IDENTITY_PROMPT);
+  for (const fragment of fragments) {
+    expect(systemPrompt).toContain(fragment);
+  }
 }
 
 async function writeConfigFile(config: unknown) {
@@ -117,15 +172,13 @@ describe("mingxu CLI", () => {
       },
     });
     const fetchMock = vi.fn(async (_url: string, init: { body?: string }) => {
-      expect(JSON.parse(init.body ?? "{}")).toMatchObject({
+      const body = JSON.parse(init.body ?? "{}") as { model?: string; system?: unknown; messages?: Array<{ role?: string; content?: string }> };
+      expect(body).toMatchObject({
         model: "claude-sonnet-5",
-        system: "Be concise",
         messages: [{ role: "user", content: "Say hello" }],
       });
-      return createResponse({
-        content: [{ type: "text", text: "selected answer" }],
-        stop_reason: "end_turn",
-      });
+      expectManagedSystemPrompt(body.system, "Be concise");
+      return createAnthropicSseResponse("selected answer");
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
@@ -175,8 +228,14 @@ describe("mingxu CLI", () => {
     });
     const fetchMock = vi.fn(async (url: string, init: { body?: string }) => {
       expect(url).toBe("https://gateway.example.test/v1/chat/completions");
-      expect(JSON.parse(init.body ?? "{}")).toMatchObject({ model: "gpt-test" });
-      return createResponse({ choices: [{ message: { content: "gateway answer" } }] });
+      const body = JSON.parse(init.body ?? "{}") as {
+        model?: string;
+        messages?: Array<{ role?: string; content?: unknown }>;
+      };
+      expect(body).toMatchObject({ model: "gpt-test" });
+      expect(body.messages?.[0]?.role).toBe("system");
+      expectManagedSystemPrompt(body.messages?.[0]?.content);
+      return createOpenAiSseResponse("gateway answer");
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
@@ -197,9 +256,7 @@ describe("mingxu CLI", () => {
       models: { chat: { provider: "work-openai", model: "gpt-test", apiKey: "test-key" } },
       providers: { "work-openai": "openai" },
     });
-    const fetchMock = vi.fn(async () => createResponse({
-      choices: [{ message: { content: "alias answer" } }],
-    }));
+    const fetchMock = vi.fn(async () => createOpenAiSseResponse("alias answer"));
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     try {
@@ -368,9 +425,7 @@ describe("mingxu CLI", () => {
       },
       plugins: [],
     });
-    const fetchMock = vi.fn(async () => createResponse({
-      choices: [{ message: { content: "deepseek-live-ok" } }],
-    }));
+    const fetchMock = vi.fn(async () => createOpenAiSseResponse("deepseek-live-ok"));
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     try {
@@ -395,9 +450,7 @@ describe("mingxu CLI", () => {
       },
       plugins: [],
     });
-    const fetchMock = vi.fn(async () => createResponse({
-      choices: [{ message: { content: "deepseek-live-ok" } }],
-    }));
+    const fetchMock = vi.fn(async () => createOpenAiSseResponse("deepseek-live-ok"));
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     try {
@@ -561,10 +614,7 @@ describe("mingxu CLI", () => {
     const { root, configPath } = await writeConfigFile({
       model: { provider: "anthropic", model: "claude-sonnet-5", apiKey: "test-key" },
     });
-    const fetchMock = vi.fn(async () => createResponse({
-      content: [{ type: "text", text: "legacy answer" }],
-      stop_reason: "end_turn",
-    }));
+    const fetchMock = vi.fn(async () => createAnthropicSseResponse("legacy answer"));
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     try {

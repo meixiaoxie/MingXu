@@ -7,7 +7,7 @@
 - [docs/agent-runtime-design.md](docs/agent-runtime-design.md)
 - [docs/plans/development-roadmap.md](docs/plans/development-roadmap.md)
 
-当前版本是 `0.1.x` 开发阶段，npm 包仍然是 `private`，请从源码或本地打包安装。
+当前版本是 `0.2.1`，npm 包仍然是 `private`，请从源码或本地打包安装。
 
 ## 现在已经能做什么
 

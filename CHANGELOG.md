@@ -8,9 +8,11 @@ The project follows a practical pre-1.0 compatibility policy:
 - Public changes that affect CLI flags, config schema, emitted session/audit shapes, or exported SDK types must be documented here.
 - When a documented public behavior is going away, the deprecation will be called out here before removal.
 
-## Unreleased
+## 0.2.1
 
-- `mingxu` now has a usable CLI 0.2 flow: interactive chat mode, `chat`, `resume`, `--continue`, `sessions`, `doctor`, `init --global`, and `init --project`.
+_Released 2026-07-29._
+
+- `mingxu` now has a usable CLI 0.2.1 flow: interactive chat mode, `chat`, `resume`, `--continue`, `sessions`, `doctor`, `init --global`, and `init --project`.
 - Added first-launch TTY onboarding for machines that do not yet have a usable configuration.
 - Added global and project configuration discovery with explicit trust handling for automatically discovered projects.
 - Added support for layered config sources and `env:NAME` resolution before provider, MCP header, or MCP env creation.
