@@ -12,6 +12,7 @@ import type { TransformContext } from "./context.js";
 import type { StreamFn } from "./stream-types.js";
 import type { AgentEventSink } from "../events/types.js";
 import type { ApprovalHandler } from "../approval/types.js";
+import type { ToolGovernance as PluginToolGovernance } from "@mingxu/plugin-sdk";
 // 从 model-protocol 导入 ModelUsage，避免重复定义
 import type { ModelUsage } from "../models/model-protocol.js";
 
@@ -92,17 +93,7 @@ export type RunTerminationReason =
   | "model_error"
   | "aborted";
 
-export interface ToolGovernance {
-  readonly kind: "file" | "command" | "network" | "generic";
-  readonly action?: "read" | "write" | "exec" | "request";
-  readonly rootDirectory?: string;
-  readonly pathField?: string;
-  readonly argvField?: string;
-  readonly cwdField?: string;
-  readonly envFields?: readonly string[];
-  readonly timeoutMsField?: string;
-  readonly urlField?: string;
-}
+export type ToolGovernance = PluginToolGovernance;
 
 export interface RunContext {
   runId: string;

@@ -153,6 +153,8 @@ export type {
   ExtensionPluginContext,
   ExtensionSource,
   ExtensionSourceKind,
+  ExtensionToggleOptions,
+  ExtensionUpdateRequest,
 } from "./extensions/index.js";
 export {
   agentConfigSchema,
@@ -254,4 +256,3 @@ export type {
   SubagentRuntimeOptions,
   SubagentSpawnRequest,
 } from "./subagents/index.js";
-export * from "./tui/index.js";

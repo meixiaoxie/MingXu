@@ -23,4 +23,3 @@ export interface OverlayHandle {
 }
 
 export const CURSOR_MARKER = "\u001b_pi:c\u0007";
-

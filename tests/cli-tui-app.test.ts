@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { CliTuiApp } from "../src/cli/tui-app.js";
 import type { CliRuntimeContext, CliRuntimeSnapshot } from "../src/cli/runtime-types.js";
 import type { AgentSession } from "../src/core/agent-session.js";
+import type { ProcessTerminal } from "@mingxu/tui";
 
 function createFakeTerminal() {
   const keyListeners: Array<(input: { sequence: string; name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean }) => void> = [];
@@ -28,7 +29,7 @@ function createFakeTerminal() {
         listener(input);
       }
     },
-  } as unknown as import("../src/tui/terminal.js").ProcessTerminal & { emit(input: { sequence: string; name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean }): void };
+  } as unknown as ProcessTerminal & { emit(input: { sequence: string; name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean }): void };
 }
 
 function createFakeSession(): AgentSession {

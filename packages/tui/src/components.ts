@@ -357,10 +357,13 @@ export class Editor implements Component {
 export class Loader implements Component {
   #frame = 0;
   readonly #frames = ["|", "/", "-", "\\"];
+
   invalidate(): void {}
+
   tick(): void {
     this.#frame = (this.#frame + 1) % this.#frames.length;
   }
+
   render(_width: number): string[] {
     return [this.#frames[this.#frame] ?? "|"];
   }
@@ -386,7 +389,7 @@ export class Markdown implements Component {
         .replace(/^###\s+/u, "  ")
         .replace(/^##\s+/u, "")
         .replace(/^#\s+/u, "")
-        .replace(/^\s*-\s+/u, "• ");
+        .replace(/^\s*-\s+/u, "- ");
       lines.push(...wrapText(line, width));
     }
     return lines;
@@ -401,18 +404,21 @@ export interface TreeNode {
 
 export class Tree implements Component {
   #nodes: readonly TreeNode[] = [];
+
   constructor(nodes: readonly TreeNode[] = []) {
     this.#nodes = nodes;
   }
+
   invalidate(): void {}
+
   render(width: number): string[] {
     const lines: string[] = [];
     const visit = (nodes: readonly TreeNode[], prefix: string): void => {
       nodes.forEach((node, index) => {
-        const connector = index === nodes.length - 1 ? "└─ " : "├─ ";
+        const connector = index === nodes.length - 1 ? "`-- " : "|-- ";
         lines.push(truncateToWidth(`${prefix}${connector}${node.label}`, width));
         if (node.children?.length) {
-          visit(node.children, `${prefix}${index === nodes.length - 1 ? "   " : "│  "}`);
+          visit(node.children, `${prefix}${index === nodes.length - 1 ? "    " : "|   "}`);
         }
       });
     };
@@ -423,10 +429,13 @@ export class Tree implements Component {
 
 export class Table implements Component {
   #rows: readonly (readonly string[])[] = [];
+
   constructor(rows: readonly (readonly string[])[] = []) {
     this.#rows = rows;
   }
+
   invalidate(): void {}
+
   render(width: number): string[] {
     return this.#rows.map((row) => truncateToWidth(row.join(" | "), width));
   }
@@ -434,10 +443,13 @@ export class Table implements Component {
 
 export class KeyValue implements Component {
   #entries: readonly (readonly [string, string])[] = [];
+
   constructor(entries: readonly (readonly [string, string])[] = []) {
     this.#entries = entries;
   }
+
   invalidate(): void {}
+
   render(width: number): string[] {
     return this.#entries.map(([key, value]) => truncateToWidth(`${key}: ${value}`, width));
   }
@@ -460,17 +472,20 @@ export class Progress implements Component {
     const pct = Math.max(0, Math.min(100, Math.round((this.#current / this.#total) * 100)));
     const barWidth = Math.max(8, width - visibleWidth(this.#label) - 10);
     const filled = Math.round((barWidth * pct) / 100);
-    const bar = `[${"█".repeat(filled)}${" ".repeat(Math.max(0, barWidth - filled))}]`;
+    const bar = `[${"=".repeat(filled)}${" ".repeat(Math.max(0, barWidth - filled))}]`;
     return [truncateToWidth(`${this.#label} ${bar} ${pct}%`, width)];
   }
 }
 
 export class Diff implements Component {
   #lines: readonly string[] = [];
+
   constructor(lines: readonly string[] = []) {
     this.#lines = lines;
   }
+
   invalidate(): void {}
+
   render(width: number): string[] {
     return this.#lines.map((line) => truncateToWidth(line, width));
   }
@@ -479,6 +494,5 @@ export class Diff implements Component {
 function splitWithCursor(value: string, cursorIndex: number): string[] {
   const before = value.slice(0, cursorIndex);
   const after = value.slice(cursorIndex);
-  const markerIndex = before.length;
   return [`${before}${CURSOR_MARKER}${after}`];
 }

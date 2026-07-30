@@ -4,6 +4,7 @@ const manifest = {
   name: "MingXu Coding Tools",
   version: "0.4.0",
   kind: "tool",
+  adapterId: "mingxu-native",
   entry: "index.js",
   description: "Official coding tools plugin skeleton for workspace-scoped file and command actions.",
   permissions: {

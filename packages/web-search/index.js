@@ -4,6 +4,7 @@ const manifest = {
   name: "MingXu Web Search",
   version: "0.4.0",
   kind: "tool",
+  adapterId: "mingxu-native",
   entry: "index.js",
   description: "Optional web search plugin skeleton for future Brave, Tavily, and SearXNG adapters.",
   permissions: {

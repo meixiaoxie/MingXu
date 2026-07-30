@@ -5,6 +5,7 @@ export class TuiHost {
   readonly #terminal: ProcessTerminal;
   #root: Component;
   #renderPending = false;
+  #forceFullRender = false;
 
   constructor(terminal: ProcessTerminal, root: Component) {
     this.#terminal = terminal;
@@ -16,7 +17,10 @@ export class TuiHost {
     this.requestRender();
   }
 
-  requestRender(): void {
+  requestRender(options: { readonly full?: boolean } = {}): void {
+    if (options.full === true) {
+      this.#forceFullRender = true;
+    }
     if (this.#renderPending) {
       return;
     }
@@ -28,7 +32,7 @@ export class TuiHost {
   }
 
   renderNow(): void {
-    this.#terminal.render(this.#root.render(this.#terminal.size.columns));
+    this.#terminal.render(this.#root.render(this.#terminal.size.columns), { full: this.#forceFullRender });
+    this.#forceFullRender = false;
   }
 }
-

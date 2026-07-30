@@ -31,6 +31,10 @@ export interface ApprovalPrompt {
   readonly input: unknown;
   readonly policyEffect: "allow" | "deny" | "ask";
   readonly policyObligations?: readonly unknown[];
+  readonly source?: string;
+  readonly risk?: string;
+  readonly normalizedResource?: string;
+  readonly policyDetails?: readonly string[];
 }
 
 export interface ApprovalResponse {

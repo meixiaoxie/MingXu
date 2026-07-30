@@ -149,11 +149,11 @@ beforeAll(async () => {
 
   // Create a real tarball, then install it into an empty project. This catches
   // missing files, broken package metadata, and unusable executable links.
-  const npmCommand = await resolveNpmCommand();
+  const packPnpmCommand = resolvePnpmCommand();
   const packed = await runCommand(
-    npmCommand.command,
-    [...npmCommand.args, "pack", "--json", "--pack-destination", packDirectory],
-    cliPackageRoot,
+    packPnpmCommand.command,
+    [...packPnpmCommand.args, "-C", "packages/cli", "run", "pack:staged", "--", "--pack-destination", packDirectory],
+    projectRoot,
   );
   expect(packed.exitCode, packed.stderr).toBe(0);
   const reports = parsePackReports(packed.stdout);
@@ -167,6 +167,7 @@ beforeAll(async () => {
   expect(paths).not.toContain("dist/stale.js");
 
   const tarballPath = join(packDirectory, report?.filename ?? "missing.tgz");
+  const npmCommand = await resolveNpmCommand();
   const installed = await runCommand(
     npmCommand.command,
     [...npmCommand.args, "install", "--ignore-scripts", "--no-audit", "--no-fund", tarballPath],

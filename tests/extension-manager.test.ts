@@ -79,8 +79,12 @@ describe("ExtensionManager", () => {
     });
 
     expect(installed.record.id).toBe("sample-extension");
-    expect(installed.record.enabled).toBe(true);
+    expect(installed.record.enabled).toBe(false);
     expect(await manager.list()).toHaveLength(1);
+
+    const enabled = await manager.enable("sample-extension", "user");
+    expect(enabled.enabled).toBe(true);
+    expect((await manager.list())[0]?.enabled).toBe(true);
 
     const lockPath = join(root, "user", "extensions.lock.json");
     const lock = JSON.parse(await readFile(lockPath, "utf8")) as { records?: Array<{ id?: string }> };

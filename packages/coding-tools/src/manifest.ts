@@ -1,39 +1,18 @@
+import type {
+  PluginContribution,
+  PluginManifestV1,
+  ToolGovernance,
+} from "@mingxu/plugin-sdk";
+
 export const CODING_TOOL_NAMES = ["read", "list", "search", "write", "edit", "command"] as const;
 
 export type CodingToolName = (typeof CODING_TOOL_NAMES)[number];
 
-export interface CodingToolGovernance {
-  readonly kind: "file" | "command";
-  readonly action: "read" | "write" | "exec";
-  readonly rootDirectory?: string;
-  readonly pathField?: string;
-  readonly argvField?: string;
-  readonly cwdField?: string;
-  readonly envFields?: readonly string[];
-  readonly timeoutMsField?: string;
-  readonly maxOutputBytesField?: string;
-}
+export type CodingToolGovernance = ToolGovernance;
 
-export interface CodingToolContribution {
+export interface CodingToolContribution extends PluginContribution {
   readonly kind: "tool";
   readonly name: CodingToolName;
-  readonly description: string;
-}
-
-export interface CodingToolsManifestV1 {
-  readonly apiVersion: "mingxu/plugin-v1";
-  readonly id: string;
-  readonly name: string;
-  readonly version: string;
-  readonly kind: "tool";
-  readonly entry: string;
-  readonly description: string;
-  readonly permissions: {
-    readonly files: "read" | "write";
-    readonly commands: "allow";
-    readonly network: "none";
-  };
-  readonly contributions: readonly CodingToolContribution[];
 }
 
 export interface CodingToolEntry {
@@ -108,12 +87,25 @@ export const codingToolEntries: Record<CodingToolName, CodingToolEntry> = {
   },
 };
 
+export interface CodingToolsManifestV1 extends PluginManifestV1 {
+  readonly adapterId: "mingxu-native";
+  readonly entry: string;
+  readonly description: string;
+  readonly permissions: {
+    readonly files: "read" | "write";
+    readonly commands: "allow";
+    readonly network: "none";
+  };
+  readonly contributions: readonly CodingToolContribution[];
+}
+
 export const codingToolsManifest: CodingToolsManifestV1 = {
   apiVersion: "mingxu/plugin-v1",
   id: "mingxu-coding-tools",
   name: "MingXu Coding Tools",
   version: "0.4.0",
   kind: "tool",
+  adapterId: "mingxu-native",
   entry: "dist/index.js",
   description: "Official coding tools plugin skeleton for workspace-scoped file and command actions.",
   permissions: {

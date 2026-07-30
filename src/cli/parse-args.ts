@@ -18,6 +18,7 @@ export interface CliArguments {
   readonly noGlobalConfig?: boolean;
   readonly trustProject?: boolean;
   readonly noTrustProject?: boolean;
+  readonly temporary?: boolean;
 }
 
 /** Parses a deliberately small CLI surface without requiring a command-line package. */
@@ -41,6 +42,7 @@ export function parseArgs(argv: readonly string[]): CliArguments {
   let noGlobalConfig = false;
   let trustProject = false;
   let noTrustProject = false;
+  let temporary = false;
   const positionals: string[] = [];
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -92,6 +94,8 @@ export function parseArgs(argv: readonly string[]): CliArguments {
       trustProject = true;
     } else if (argument === "--no-trust-project") {
       noTrustProject = true;
+    } else if (argument === "--temporary") {
+      temporary = true;
     } else if (argument === "--help" || argument === "-h") {
       help = true;
     } else if (argument === "--version" || argument === "-v") {
@@ -144,6 +148,7 @@ export function parseArgs(argv: readonly string[]): CliArguments {
     ...(noGlobalConfig ? { noGlobalConfig } : {}),
     ...(trustProject ? { trustProject } : {}),
     ...(noTrustProject ? { noTrustProject } : {}),
+    ...(temporary ? { temporary } : {}),
   };
 }
 

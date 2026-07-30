@@ -4,6 +4,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { createRuntimeEvent } from "../events/runtime-events.js";
 import type { Tool } from "../core/types.js";
+import { definePluginManifest } from "./plugin.js";
 import type { Plugin, PluginContext, PluginManifestV1, PluginKind } from "./plugin.js";
 
 const SUPPORTED_PLUGIN_EXTENSIONS = new Set([".js", ".mjs", ".cjs"]);
@@ -289,7 +290,7 @@ function parsePluginManifest(source: string): PluginManifestV1 {
   if (parsed.kind === undefined) {
     throw new Error("Extension manifest kind is required");
   }
-  return {
+  return definePluginManifest({
     apiVersion: "mingxu/plugin-v1",
     id: parsed.id.trim(),
     name: parsed.name.trim(),
@@ -299,8 +300,8 @@ function parsePluginManifest(source: string): PluginManifestV1 {
     ...(parsed.description !== undefined ? { description: parsed.description } : {}),
     ...(parsed.configSchema !== undefined ? { configSchema: parsed.configSchema } : {}),
     ...(parsed.permissions !== undefined ? { permissions: parsed.permissions } : {}),
-    ...(parsed.contributions !== undefined ? { contributions: parsed.contributions } : {}),
-  };
+    contributions: Array.isArray(parsed.contributions) ? parsed.contributions : [],
+  });
 }
 
 function isNodeError(value: unknown): value is NodeJS.ErrnoException {

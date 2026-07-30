@@ -15,6 +15,7 @@ import { PluginLoader, resolvePluginLoadRequest } from "../plugins/plugin-loader
 import { createLoadResourceTool } from "../tools/builtin/load-resource-tool.js";
 import { createSpawnSubagentTool } from "../tools/builtin/spawn-subagent-tool.js";
 import { ToolRegistry } from "../tools/tool-registry.js";
+import type { Tool } from "../core/types.js";
 import { parseArgs } from "./parse-args.js";
 import { discoverCliConfig, getGlobalConfigPath, getProjectConfigPath, getUserConfigDir, setProjectTrust } from "./config-discovery.js";
 import { JsonlAuditWriter } from "../audit/jsonl-audit-writer.js";
@@ -45,7 +46,7 @@ import { ChatInputController } from "./chat-input.js";
 import { findChatCommand, formatChatHelp, suggestChatCommands } from "./chat-commands.js";
 import type { CliRuntimeContext, CliRuntimeSnapshot, CliSessionRequest } from "./runtime-types.js";
 import { CliTuiApp } from "./tui-app.js";
-import { ProcessTerminal } from "../tui/terminal.js";
+import { ProcessTerminal } from "@mingxu/tui";
 
 export interface CliDependencies {
   run?: (
@@ -63,7 +64,7 @@ export interface CliDependencies {
   debugProvider?: boolean;
 }
 
-const HELP_TEXT = `Usage: mingxu [options] [prompt]\n\nCommands:\n  init                    Create a starter config\n  chat [prompt]           Enter interactive chat mode\n  doctor                  Check config, env, plugins, session, and audit wiring\n  resume [sessionId]      Resume a saved session and continue with a new prompt\n  sessions                List recent sessions\n  extensions [action]     Inspect and manage installed extensions\n\nOptions:\n  -c, --config <path>     JSON configuration file\n  -p, --prompt <text>     Prompt to send to the agent\n  -m, --model <name>      Named model from config.models\n      --continue          Resume the latest session in the current workspace\n      --yes               Skip confirmation for extension install/update\n      --scope <scope>     Target extension scope: user or project\n      --global            Write init output to the global config location\n      --project           Write init output to the project config location\n      --no-global-config  Ignore the global config layer\n      --trust-project     Trust the detected project config layer\n      --no-trust-project  Ignore the detected project config layer\n      --profile <name>    Init profile: minimal or secure-local\n      --online            Allow doctor to perform a live provider connectivity probe\n      --debug-provider    Print resolved provider config and request diagnostics to stderr\n  -h, --help              Show this help\n  -v, --version           Show the version\n`;
+const HELP_TEXT = `Usage: mingxu [options] [prompt]\n\nCommands:\n  init                    Create a starter config\n  chat [prompt]           Enter interactive chat mode\n  doctor                  Check config, env, plugins, session, and audit wiring\n  resume [sessionId]      Resume a saved session and continue with a new prompt\n  sessions                List recent sessions\n  extensions [action]     Inspect and manage installed extensions\n\nExtensions actions:\n  inspect <source>        Inspect an extension source without installing\n  add <source>            Install an extension as disabled by default\n  update <id> [source]    Update an installed extension\n  enable <id>             Enable an installed extension\n  disable <id>            Disable an installed extension\n  remove <id>             Remove a disabled extension\n  list                    List installed extensions\n  doctor                  Diagnose extension installation health\n  init <directory>        Create an extension skeleton\n\nOptions:\n  -c, --config <path>     JSON configuration file\n  -p, --prompt <text>     Prompt to send to the agent\n  -m, --model <name>      Named model from config.models\n      --continue          Resume the latest session in the current workspace\n      --yes               Skip confirmation for extension install/update\n      --temporary         Apply enable/disable only for the current process\n      --scope <scope>     Target extension scope: user or project\n      --global            Write init output to the global config location\n      --project           Write init output to the project config location\n      --no-global-config  Ignore the global config layer\n      --trust-project     Trust the detected project config layer\n      --no-trust-project  Ignore the detected project config layer\n      --profile <name>    Init profile: minimal or secure-local\n      --online            Allow doctor to perform a live provider connectivity probe\n      --debug-provider    Print resolved provider config and request diagnostics to stderr\n  -h, --help              Show this help\n  -v, --version           Show the version\n`;
 
 type MutableInstructionLoaderOptions = {
   systemPrompt?: string;
@@ -486,10 +487,10 @@ function createDefaultRunner(
       await mcpManager.connectAll();
 
       const pluginLoader = new PluginLoader({
-        registerTool: (tool) => {
+        registerTool: (tool: Tool) => {
           toolRegistry.register(tool);
         },
-        unregisterTool: (name) => toolRegistry.unregister(name),
+        unregisterTool: (name: string) => toolRegistry.unregister(name),
         eventSink,
       });
       for (const plugin of config.plugins) {
@@ -659,10 +660,10 @@ async function createCliRuntimeContext(options: {
   await mcpManager.connectAll();
 
   const pluginLoader = new PluginLoader({
-    registerTool: (tool) => {
+    registerTool: (tool: Tool) => {
       toolRegistry.register(tool);
     },
-    unregisterTool: (name) => toolRegistry.unregister(name),
+    unregisterTool: (name: string) => toolRegistry.unregister(name),
     eventSink,
   });
   for (const plugin of options.config.plugins) {
@@ -1512,24 +1513,29 @@ async function handleExtensionsCommand(options: {
       const result = await manager.inspect(source);
       return {
         output: [
+          `adapter: ${result.adapterId}`,
           `id: ${result.manifest.id}`,
           `name: ${result.manifest.name}`,
           `version: ${result.manifest.version}`,
           `kind: ${result.manifest.kind}`,
+          `permissions: ${JSON.stringify(result.manifest.permissions ?? {})}`,
+          `contributions: ${result.manifest.contributions.map((contribution: { readonly name: string }) => contribution.name).join(", ") || "(none)"}`,
           `entry: ${result.entryPath}`,
           `manifestHash: ${result.manifestHash}`,
           `sha256: ${result.sha256}`,
           `source: ${result.source.kind}:${result.source.locator}`,
-          `contributions: ${result.manifest.contributions?.length ?? 0}`,
+          ...(result.upstreamId !== undefined ? [`upstreamId: ${result.upstreamId}`] : []),
+          ...(result.upstreamVersion !== undefined ? [`upstreamVersion: ${result.upstreamVersion}`] : []),
+          ...(result.capabilities !== undefined ? [`capabilities: ${result.capabilities.join(", ")}`] : []),
+          ...(result.unsupportedCapabilities !== undefined ? [`unsupportedCapabilities: ${result.unsupportedCapabilities.join(", ") || "(none)"}`] : []),
         ].join("\n"),
         exitCode: 0,
       };
     }
-    case "add":
-    case "update": {
+    case "add": {
       const source = options.args.commandArgs?.[0];
       if (!source) {
-        throw new Error(`extensions ${command} requires a source path, tarball, npm spec, or git URL`);
+        throw new Error("extensions add requires a source path, tarball, npm spec, or git URL");
       }
       if (!isInteractive && !options.args.yes) {
         throw new Error("Non-interactive extension installation requires --yes");
@@ -1552,6 +1558,38 @@ async function handleExtensionsCommand(options: {
         exitCode: 0,
       };
     }
+    case "update": {
+      const id = options.args.commandArgs?.[0];
+      if (!id) {
+        throw new Error("extensions update requires an extension id");
+      }
+      const source = options.args.commandArgs?.[1];
+      if (!isInteractive && !options.args.yes) {
+        throw new Error("Non-interactive extension installation requires --yes");
+      }
+      if (isInteractive && !options.args.yes) {
+        const confirmed = await confirmExtensionInstall(source ?? id, scope);
+        if (!confirmed) {
+          return { output: "Cancelled.", exitCode: 1 };
+        }
+      }
+      const result = await manager.update({
+        id,
+        scope,
+        ...(source !== undefined ? { source } : {}),
+        yes: true,
+      });
+      return {
+        output: [
+          `Updated ${result.record.id}`,
+          `scope: ${result.record.scope}`,
+          `enabled: ${result.record.enabled}`,
+          `adapter: ${result.record.adapterId}`,
+          `source: ${result.record.source.kind}:${result.record.source.locator}`,
+        ].join("\n"),
+        exitCode: 0,
+      };
+    }
     case "enable":
     case "disable":
     case "remove": {
@@ -1563,15 +1601,16 @@ async function handleExtensionsCommand(options: {
       if (!resolvedScope) {
         throw new Error(`Extension not found: ${id}`);
       }
+      const toggleOptions = options.args.temporary === true ? { temporary: true } : {};
       if (command === "enable") {
-        await manager.enable(id, resolvedScope);
+        await manager.enable(id, resolvedScope, toggleOptions);
       } else if (command === "disable") {
-        await manager.disable(id, resolvedScope);
+        await manager.disable(id, resolvedScope, toggleOptions);
       } else {
         await manager.remove(id, resolvedScope);
       }
       return {
-        output: `${command}d ${id} in ${resolvedScope} scope.`,
+        output: `${options.args.temporary ? "temporarily " : ""}${command}d ${id} in ${resolvedScope} scope.`,
         exitCode: 0,
       };
     }

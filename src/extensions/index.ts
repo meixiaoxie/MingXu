@@ -4,6 +4,8 @@ export {
   type ExtensionInstallResult,
   type ExtensionListEntry,
   type ExtensionManagerOptions,
+  type ExtensionToggleOptions,
+  type ExtensionUpdateRequest,
 } from "./extension-manager.js";
 export type {
   ExtensionAdapterV1,

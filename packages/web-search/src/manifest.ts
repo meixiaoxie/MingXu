@@ -1,3 +1,9 @@
+import type {
+  PluginContribution,
+  PluginManifestV1,
+  ToolGovernance,
+} from "@mingxu/plugin-sdk";
+
 export const WEB_SEARCH_BACKENDS = ["auto", "brave", "tavily", "searxng"] as const;
 
 export type WebSearchBackend = (typeof WEB_SEARCH_BACKENDS)[number];
@@ -9,18 +15,15 @@ export interface WebSearchConfig {
   readonly domains?: readonly string[];
 }
 
-export interface WebSearchContribution {
+export type WebSearchGovernance = ToolGovernance;
+
+export interface WebSearchContribution extends PluginContribution {
   readonly kind: "tool";
   readonly name: "web_search";
-  readonly description: string;
 }
 
-export interface WebSearchManifestV1 {
-  readonly apiVersion: "mingxu/plugin-v1";
-  readonly id: string;
-  readonly name: string;
-  readonly version: string;
-  readonly kind: "tool";
+export interface WebSearchManifestV1 extends PluginManifestV1 {
+  readonly adapterId: "mingxu-native";
   readonly entry: string;
   readonly description: string;
   readonly permissions: {
@@ -44,6 +47,7 @@ export const webSearchManifest: WebSearchManifestV1 = {
   name: "MingXu Web Search",
   version: "0.4.0",
   kind: "tool",
+  adapterId: "mingxu-native",
   entry: "dist/index.js",
   description: "Optional web search plugin skeleton for future Brave, Tavily, and SearXNG adapters.",
   permissions: {

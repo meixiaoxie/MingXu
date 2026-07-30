@@ -64,6 +64,7 @@ export interface PluginManifestV1 {
   readonly configSchema?: unknown;
   readonly permissions?: PluginPermissions;
   readonly contributions: readonly PluginContribution[];
+  readonly adapterId?: string;
 }
 
 export interface PluginToolDefinition {
@@ -80,7 +81,7 @@ export interface PluginEvent {
 }
 
 export interface PluginEventSink {
-  emit(event: PluginEvent): void;
+  emit(event: unknown): void | Promise<void>;
 }
 
 export interface PluginContextV1 {
@@ -113,6 +114,7 @@ export interface ExtensionSource {
 }
 
 export interface ExtensionInspectResult {
+  readonly adapterId: string;
   readonly manifest: PluginManifestV1;
   readonly packageRoot: string;
   readonly manifestPath: string;
@@ -120,6 +122,11 @@ export interface ExtensionInspectResult {
   readonly manifestHash: string;
   readonly sha256: string;
   readonly source: ExtensionSource;
+  readonly upstreamId?: string;
+  readonly upstreamVersion?: string;
+  readonly upstreamManifestHash?: string;
+  readonly capabilities?: readonly string[];
+  readonly unsupportedCapabilities?: readonly string[];
 }
 
 export interface ExtensionDescriptor {
@@ -140,6 +147,11 @@ export interface ExtensionDescriptor {
   readonly health: "healthy" | "unhealthy" | "unknown";
   readonly installedAt: string;
   readonly updatedAt: string;
+  readonly upstreamId?: string;
+  readonly upstreamVersion?: string;
+  readonly upstreamManifestHash?: string;
+  readonly capabilities?: readonly string[];
+  readonly unsupportedCapabilities?: readonly string[];
   readonly error?: string;
 }
 
@@ -153,9 +165,17 @@ export interface ExtensionLockFile {
 
 export interface ExtensionAdapterV1 {
   readonly adapterId: string;
-  supports(source: ExtensionSource, manifest: PluginManifestV1): boolean;
-  inspect(source: ExtensionSource): Promise<ExtensionInspectResult>;
+  probe(packageRoot: string): Promise<number | false>;
+  inspect(packageRoot: string, source: ExtensionSource): Promise<ExtensionInspectResult>;
+  load(packageRoot: string, source: ExtensionSource): Promise<PluginModuleV1>;
 }
+
+export type ExtensionKind = PluginKind;
+export type ExtensionContribution = PluginContribution;
+export type ExtensionManifestV1 = PluginManifestV1;
+export type ExtensionPermissions = PluginPermissions;
+export type ExtensionPluginContext = PluginContextV1;
+export type ExtensionPlugin = PluginModuleV1;
 
 export function definePluginManifest(manifest: PluginManifestV1): PluginManifestV1 {
   if (manifest.apiVersion !== PLUGIN_API_VERSION) {
@@ -175,6 +195,17 @@ export function definePluginManifest(manifest: PluginManifestV1): PluginManifest
   }
   if (!Array.isArray(manifest.contributions)) {
     throw new Error("Plugin manifest contributions must be an array");
+  }
+  if (manifest.permissions !== undefined) {
+    if (manifest.permissions.files !== undefined && !["none", "read", "write"].includes(manifest.permissions.files)) {
+      throw new Error("Plugin manifest permissions.files is invalid");
+    }
+    if (manifest.permissions.network !== undefined && !["none", "allow"].includes(manifest.permissions.network)) {
+      throw new Error("Plugin manifest permissions.network is invalid");
+    }
+    if (manifest.permissions.commands !== undefined && !["none", "allow"].includes(manifest.permissions.commands)) {
+      throw new Error("Plugin manifest permissions.commands is invalid");
+    }
   }
   return manifest;
 }

@@ -24,7 +24,7 @@ export function createCodingToolsPluginSkeleton(): CodingToolsPluginSkeleton {
     name: codingToolsManifest.name,
     manifest: codingToolsManifest,
     setup() {
-      // 这里先保留为空：真正的工具执行器会在后续接入。
+      // Skeleton only; real execution comes from a future adapter package.
     },
   };
 }

@@ -3,22 +3,9 @@ import { inspect } from "node:util";
 import { AgentSession } from "../core/agent-session.js";
 import type { AgentEvent } from "../events/types.js";
 import type { ApprovalPrompt, ApprovalResponse, ApprovalResponseScope } from "../approval/types.js";
-import { ProcessTerminal } from "../tui/terminal.js";
-import { TuiHost } from "../tui/host.js";
-import {
-  Box,
-  Editor,
-  KeyValue,
-  Markdown,
-  SelectList,
-  Table,
-  Text,
-  Tree,
-  type SelectListItem,
-  type TreeNode,
-} from "../tui/components.js";
-import { truncateToWidth, visibleWidth, wrapText } from "../tui/strings.js";
-import type { KeyInput, Component } from "../tui/types.js";
+import { ProcessTerminal, Box, Editor, KeyValue, Markdown, SelectList, Table, Text, Tree, TuiHost, type SelectListItem, type TreeNode, type KeyInput, type Component } from "@mingxu/tui";
+import { ConversationViewModel } from "./conversation-view-model.js";
+import { truncateToWidth, visibleWidth, wrapText } from "@mingxu/tui";
 import type { CliRuntimeContext, CliRuntimeSnapshot, CliSessionRequest } from "./runtime-types.js";
 import { formatChatHelp, suggestChatCommands } from "./chat-commands.js";
 import { redactText, redactValue } from "../redaction/redactor.js";
@@ -69,19 +56,24 @@ export class CliTuiApp {
   readonly #host: TuiHost;
   readonly #screen: CliTuiScreen;
   readonly #editor: Editor;
-  readonly #messages: ConversationBlock[] = [];
+  readonly #conversation = new ConversationViewModel();
   #snapshot: CliRuntimeSnapshot | undefined;
   #currentSession: AgentSession;
   #currentSessionId: string | undefined;
   #currentModelKey: string | undefined;
   #running = false;
   #exitRequested = false;
+  #exitArmed = false;
+  #ctrlDArmed = false;
+  #detailedTranscript = false;
+  #showWelcomeBanner = true;
   #activePanel: ActivePanel = undefined;
   #approval: PendingApproval | undefined;
   #sessionSubscription: (() => void) | undefined;
   #currentAssistantBlockId: string | undefined;
   #currentToolBlocks = new Map<string, ConversationBlock>();
   #lastStatus = "Idle";
+  #blockSeq = 0;
   #finishResolver: ((exitCode: number) => void) | undefined;
 
   constructor(options: {
@@ -96,6 +88,10 @@ export class CliTuiApp {
     this.#currentSession = options.session;
     this.#currentSessionId = options.sessionId;
     this.#currentModelKey = options.modelKey;
+    this.#conversation.setEmptyHint([
+      "No messages yet. Type a prompt or /help.",
+      "Try /status, /extensions, or /agents to inspect the runtime.",
+    ]);
     this.#editor = new Editor({
       prompt: "> ",
       completionProvider: (value) => suggestChatCommands(value).map((command) => ({
@@ -118,7 +114,7 @@ export class CliTuiApp {
     this.#terminal.hideCursor();
     this.#terminal.onKeypress((input) => this.#handleKeypress(input));
     this.#terminal.onResize(() => this.#host.requestRender());
-    this.#host.requestRender();
+    this.#host.requestRender({ full: true });
 
     if (initialPrompt?.trim()) {
       this.#enqueuePrompt(initialPrompt.trim());
@@ -180,17 +176,15 @@ export class CliTuiApp {
     if (this.#running) {
       this.#currentSession.followUp(cleaned);
       this.#pushStatus(`Queued follow-up: ${cleaned}`);
-      this.#messages.push({
-        id: `queued-${Date.now()}`,
-        kind: "status",
-        title: "queued follow-up",
-        lines: [`${cleaned}`],
-      });
+      this.#conversation.addStatus(this.#nextBlockId("status"), "queued follow-up", [cleaned]);
       this.#host.requestRender();
       return;
     }
 
     this.#running = true;
+    this.#showWelcomeBanner = false;
+    this.#exitArmed = false;
+    this.#ctrlDArmed = false;
     this.#pushUserBlock(cleaned);
     this.#host.requestRender();
 
@@ -198,30 +192,20 @@ export class CliTuiApp {
       const result = await this.#currentSession.prompt(cleaned);
       this.#currentSessionId = result.sessionId ?? this.#currentSessionId;
       this.#pushStatus(`${result.terminationReason}${result.usage ? ` · ${result.usage.totalTokens ?? 0} tokens` : ""}`);
-      this.#messages.push({
-        id: `result-${Date.now()}`,
-        kind: "status",
-        title: "run result",
-        lines: [
-          `termination: ${result.terminationReason}`,
-          ...(result.usage !== undefined
-            ? [
-                `inputTokens: ${result.usage.inputTokens}`,
-                `outputTokens: ${result.usage.outputTokens}`,
-                `totalTokens: ${result.usage.totalTokens}`,
-                `modelRequests: ${result.usage.modelRequests}`,
-              ]
-            : []),
-        ],
-      });
+      this.#conversation.addStatus(this.#nextBlockId("status"), "run", [
+        `termination: ${result.terminationReason}`,
+        ...(result.usage !== undefined
+          ? [
+              `inputTokens: ${result.usage.inputTokens}`,
+              `outputTokens: ${result.usage.outputTokens}`,
+              `totalTokens: ${result.usage.totalTokens}`,
+              `modelRequests: ${result.usage.modelRequests}`,
+            ]
+          : []),
+      ]);
     } catch (error) {
       this.#pushStatus(`Error: ${error instanceof Error ? error.message : String(error)}`);
-      this.#messages.push({
-        id: `error-${Date.now()}`,
-        kind: "error",
-        title: "run error",
-        lines: [redactText(error instanceof Error ? error.message : String(error))],
-      });
+      this.#conversation.addError(this.#nextBlockId("error"), "run error", redactText(error instanceof Error ? error.message : String(error)));
       throw error;
     } finally {
       this.#running = false;
@@ -236,6 +220,7 @@ export class CliTuiApp {
   async handleSubmit(value: string): Promise<void> {
     const trimmed = value.trim();
     if (!trimmed) return;
+    this.#showWelcomeBanner = false;
     if (trimmed.startsWith("/")) {
       await this.#handleCommand(trimmed);
       return;
@@ -269,15 +254,57 @@ export class CliTuiApp {
         this.#host.requestRender();
         return;
       }
-      this.exit();
+      if (this.#editor.value.trim().length > 0) {
+        this.#editor.clear();
+        this.#exitArmed = false;
+        this.#ctrlDArmed = false;
+        this.#pushStatus("Draft cleared");
+        this.#host.requestRender();
+        return;
+      }
+      if (this.#exitArmed) {
+        this.exit();
+        return;
+      }
+      this.#exitArmed = true;
+      this.#pushStatus("Press Ctrl+C again to exit");
+      this.#host.requestRender();
       return;
     }
 
     if (input.ctrl && input.name === "d") {
-      this.exit();
+      if (this.#editor.value.trim().length > 0) {
+        const action = this.#editor.handleInput({ sequence: "", name: "delete" });
+        if (action?.type === "submit") {
+          void this.handleSubmit(action.value).catch(() => undefined);
+        }
+        this.#host.requestRender();
+        return;
+      }
+      if (this.#ctrlDArmed) {
+        this.exit();
+        return;
+      }
+      this.#ctrlDArmed = true;
+      this.#pushStatus("Press Ctrl+D again to exit");
+      this.#host.requestRender();
       return;
     }
 
+    if (input.ctrl && input.name === "l") {
+      this.#host.requestRender({ full: true });
+      return;
+    }
+
+    if (input.ctrl && input.name === "o") {
+      this.#detailedTranscript = !this.#detailedTranscript;
+      this.#pushStatus(this.#detailedTranscript ? "Detailed transcript on" : "Detailed transcript off");
+      this.#host.requestRender({ full: true });
+      return;
+    }
+
+    this.#exitArmed = false;
+    this.#ctrlDArmed = false;
     const action = this.#editor.handleInput(input);
     if (!action || action.type === "none") {
       this.#host.requestRender();
@@ -629,20 +656,25 @@ export class CliTuiApp {
   render(width: number): string[] {
     const snapshot = this.#snapshot;
     const activeModel = this.#currentModelKey ?? snapshot?.defaultModel ?? "default";
-    const header = [
-      `MingXu | session: ${this.#currentSessionId ?? "new"} | model: ${activeModel} | state: ${this.#running ? "streaming" : "idle"}${this.#activePanel ? ` | panel: ${this.#activePanel.title}` : ""}`,
-      `audit: ${snapshot?.audit.enabled ? (snapshot.audit.healthy ? "healthy" : "unhealthy") : "disabled"} | trust: ${snapshot?.projectTrusted ? "trusted" : "untrusted"} | tools: ${(this.#currentSession.state.tools ?? []).length}`,
-    ];
+    const header = this.#showWelcomeBanner
+      ? [
+          `MingXu | session: ${this.#currentSessionId ?? "new"} | model: ${activeModel}`,
+          `cwd: ${process.cwd()}`,
+        ]
+      : [];
 
     const conversation = this.#renderConversation(width);
     const input = this.#editor.render(width).map((line) => line.replace(/\u001b_pi:c\u0007/gu, ""));
     const panel = this.#renderPanel(width);
+    const footer = this.#renderFooter(snapshot, activeModel, width);
 
     const lines = [
       ...header,
-      "",
+      ...(header.length > 0 ? [""] : []),
       ...conversation,
-      ...(panel.length > 0 ? ["", ...panel, ""] : [""]),
+      ...(panel.length > 0 ? ["", ...panel, ""] : []),
+      ...(footer.length > 0 ? ["", ...footer] : []),
+      "",
       ...input,
     ];
 
@@ -674,120 +706,75 @@ export class CliTuiApp {
   }
 
   async #handleAgentEvent(event: AgentEvent): Promise<void> {
-    if (event.type === "agent_start") {
-      this.#running = true;
-      this.#pushStatus("Run started");
-      this.#host.requestRender();
-      return;
-    }
-
-    if (event.type === "turn_start") {
-      return;
-    }
-
-    if (event.type === "message_start") {
-      if (event.message.role === "assistant") {
-        this.#currentAssistantBlockId = `assistant-${Date.now()}`;
-        this.#messages.push({
-          id: this.#currentAssistantBlockId,
-          kind: "assistant",
-          title: "assistant",
-          text: "",
-          lines: [],
-          live: true,
-        });
-      }
-      if (event.message.role === "user") {
-        this.#messages.push({
-          id: `user-${Date.now()}`,
-          kind: "user",
-          title: "user",
-          lines: [event.message.content],
-        });
-      }
-      this.#host.requestRender();
-      return;
-    }
-
-    if (event.type === "message_update") {
-      const delta = event.delta as { type?: string; text?: string } | undefined;
-      if (delta?.type === "text_delta" && typeof delta.text === "string") {
-        const block = this.#messages.find((item) => item.id === this.#currentAssistantBlockId);
-        if (block) {
-          block.text = `${block.text ?? ""}${delta.text}`;
-          block.lines = [block.text];
+    switch (event.type) {
+      case "agent_start":
+        this.#running = true;
+        this.#pushStatus("Run started");
+        this.#host.requestRender();
+        return;
+      case "turn_start":
+        return;
+      case "message_start": {
+        const messageId = event.message.id ?? this.#nextBlockId(event.message.role);
+        if (event.message.role === "assistant") {
+          this.#currentAssistantBlockId = messageId;
+          this.#conversation.startAssistantMessage(messageId, "MingXu");
+        } else if (event.message.role === "user") {
+          this.#conversation.pushUserMessage(messageId, event.message.content);
         }
+        this.#host.requestRender();
+        return;
       }
-      this.#host.requestRender();
-      return;
-    }
-
-    if (event.type === "message_end") {
-      const block = this.#messages.find((item) => item.id === this.#currentAssistantBlockId);
-      if (block) {
-        block.live = false;
-        block.title = event.message.role === "assistant" ? "MingXu" : event.message.role;
-        block.text = event.message.content ?? block.text;
-        block.lines = block.text ? wrapText(block.text, 120) : block.lines;
+      case "message_update": {
+        const delta = event.delta as { type?: string; text?: string } | undefined;
+        if (event.message.role === "assistant" && typeof event.message.content === "string") {
+          const assistantId = event.message.id ?? this.#currentAssistantBlockId;
+          if (assistantId) {
+            this.#currentAssistantBlockId = assistantId;
+            if (delta?.type === "text_delta" && typeof delta.text === "string") {
+              this.#conversation.updateAssistantMessage(assistantId, event.message.content);
+            } else {
+              this.#conversation.updateAssistantMessage(assistantId, event.message.content);
+            }
+          }
+        }
+        this.#host.requestRender();
+        return;
       }
-      this.#host.requestRender();
-      return;
-    }
-
-    if (event.type === "tool_execution_start") {
-      const block: ConversationBlock = {
-        id: event.toolCall.id,
-        kind: "tool",
-        title: `tool ${event.toolCall.name} (running)`,
-        lines: [formatToolInput(event.toolCall.input)],
-      };
-      this.#currentToolBlocks.set(event.toolCall.id, block);
-      this.#messages.push(block);
-      this.#host.requestRender();
-      return;
-    }
-
-    if (event.type === "tool_execution_update") {
-      const block = this.#currentToolBlocks.get(event.toolCall.id);
-      if (block) {
-        block.lines.push(formatToolInput(event.partialResult));
+      case "message_end": {
+        if (event.message.role === "assistant") {
+          const assistantId = event.message.id ?? this.#currentAssistantBlockId;
+          if (assistantId) {
+            this.#currentAssistantBlockId = assistantId;
+            this.#conversation.finishAssistantMessage(assistantId, event.message.content, "MingXu");
+          }
+        }
+        this.#host.requestRender();
+        return;
       }
-      this.#host.requestRender();
-      return;
-    }
-
-    if (event.type === "tool_execution_end") {
-      const block = this.#currentToolBlocks.get(event.toolCall.id);
-      if (block) {
-        block.title = `tool ${event.toolCall.name} (${event.result.isError ? "error" : "done"})`;
-        block.lines.push(formatToolInput(event.result.output));
+      case "tool_execution_start": {
+        this.#conversation.startToolMessage(event.toolCall.id, event.toolCall);
+        this.#host.requestRender();
+        return;
       }
-      this.#currentToolBlocks.delete(event.toolCall.id);
-      this.#host.requestRender();
-      return;
-    }
-
-    if (event.type === "turn_end") {
-      this.#running = false;
-      this.#host.requestRender();
-      return;
-    }
-
-    if (event.type === "agent_end") {
-      this.#running = false;
-      this.#host.requestRender();
-      return;
-    }
-
-    if (event.type === "error") {
-      this.#running = false;
-      this.#messages.push({
-        id: `error-${Date.now()}`,
-        kind: "error",
-        title: "agent error",
-        lines: [event.error],
-      });
-      this.#host.requestRender();
+      case "tool_execution_update":
+        this.#conversation.updateToolMessage(event.toolCall.id, event.partialResult);
+        this.#host.requestRender();
+        return;
+      case "tool_execution_end":
+        this.#conversation.finishToolMessage(event.toolCall.id, event.toolCall, event.result);
+        this.#host.requestRender();
+        return;
+      case "turn_end":
+      case "agent_end":
+        this.#running = false;
+        this.#host.requestRender();
+        return;
+      case "error":
+        this.#running = false;
+        this.#conversation.addError(this.#nextBlockId("error"), "agent error", event.error);
+        this.#host.requestRender();
+        return;
     }
   }
 
@@ -830,7 +817,8 @@ export class CliTuiApp {
     if (input.name === "escape" || (input.ctrl && input.name === "c")) {
       this.#approval = undefined;
       approval.resolve(undefined);
-      this.#host.requestRender();
+      this.#conversation.addApprovalResult(this.#nextBlockId("approval"), approval.prompt, undefined);
+      this.#host.requestRender({ full: true });
       return;
     }
     if (input.sequence === "1") {
@@ -845,7 +833,8 @@ export class CliTuiApp {
       const item = approval.items[approval.selectedIndex] ?? approval.items[0];
       this.#approval = undefined;
       approval.resolve(item?.value);
-      this.#host.requestRender();
+      this.#conversation.addApprovalResult(this.#nextBlockId("approval"), approval.prompt, item?.value);
+      this.#host.requestRender({ full: true });
     }
   }
 
@@ -862,7 +851,7 @@ export class CliTuiApp {
     }
     if (input.name === "escape" || (input.ctrl && input.name === "c")) {
       this.#activePanel = undefined;
-      this.#host.requestRender();
+      this.#host.requestRender({ full: true });
       return;
     }
     if (input.name === "enter" || input.name === "return") {
@@ -947,34 +936,24 @@ export class CliTuiApp {
         await this.#switchSession({});
         return;
       case "clear":
-        this.#messages.length = 0;
-        this.#host.requestRender();
+        this.#conversation.clear();
+        this.#conversation.setEmptyHint([
+          "No messages yet. Type a prompt or /help.",
+          "Try /status, /extensions, or /agents to inspect the runtime.",
+        ]);
+        this.#showWelcomeBanner = true;
+        this.#host.requestRender({ full: true });
         return;
       case "compact":
-        this.#messages.push({
-          id: `status-${Date.now()}`,
-          kind: "status",
-          title: "compact",
-          lines: ["Conversation compaction is managed by the runtime."],
-        });
+        this.#conversation.addStatus(this.#nextBlockId("status"), "compact", ["Conversation compaction is managed by the runtime."]);
         this.#host.requestRender();
         return;
       case "steer":
         if (!args) {
-          this.#messages.push({
-            id: `status-${Date.now()}`,
-            kind: "status",
-            title: "steer",
-            lines: ["Usage: /steer [text]"],
-          });
+          this.#conversation.addStatus(this.#nextBlockId("status"), "steer", ["Usage: /steer [text]"]);
         } else {
           this.#currentSession.steer(args);
-          this.#messages.push({
-            id: `status-${Date.now()}`,
-            kind: "status",
-            title: "steer",
-            lines: ["Queued steering instruction for the next model turn."],
-          });
+          this.#conversation.addStatus(this.#nextBlockId("status"), "steer", ["Queued steering instruction for the next model turn."]);
         }
         this.#host.requestRender();
         return;
@@ -983,28 +962,19 @@ export class CliTuiApp {
         this.exit();
         return;
       default:
-        this.#messages.push({
-          id: `error-${Date.now()}`,
-          kind: "error",
-          title: "unknown command",
-        lines: [`/${name}`],
-      });
-      this.#host.requestRender();
+        this.#conversation.addError(this.#nextBlockId("error"), "unknown command", `/${name}`);
+        this.#host.requestRender();
     }
   }
 
   async #switchSession(request: CliSessionRequest): Promise<void> {
     if (this.#running) {
-      this.#messages.push({
-        id: `error-${Date.now()}`,
-        kind: "error",
-        title: "busy",
-        lines: ["Wait for the current run to finish before switching session or model."],
-      });
+      this.#conversation.addError(this.#nextBlockId("error"), "busy", "Wait for the current run to finish before switching session or model.");
       this.#host.requestRender();
       return;
     }
 
+    this.#showWelcomeBanner = false;
     this.#currentSession = this.#runtime.createSession({
       ...(request.modelKey !== undefined ? { modelKey: request.modelKey } : {}),
       ...(request.sessionId !== undefined ? { sessionId: request.sessionId } : {}),
@@ -1014,30 +984,20 @@ export class CliTuiApp {
     });
     this.#currentModelKey = request.modelKey ?? this.#currentModelKey;
     this.#currentSessionId = request.sessionId ?? this.#currentSessionId;
-    this.#messages.push({
-      id: `status-${Date.now()}`,
-      kind: "status",
-      title: "session switched",
-      lines: [
-        `model: ${this.#currentModelKey ?? "default"}`,
-        `session: ${this.#currentSessionId ?? "new"}`,
-      ],
-    });
+    this.#conversation.addStatus(this.#nextBlockId("status"), "session switched", [
+      `model: ${this.#currentModelKey ?? "default"}`,
+      `session: ${this.#currentSessionId ?? "new"}`,
+    ]);
     this.#bindSession(this.#currentSession);
     await this.#refreshSnapshot();
-    this.#host.requestRender();
+    this.#host.requestRender({ full: true });
   }
 
   #enqueuePrompt(prompt: string): void {
     if (!prompt.trim()) return;
     if (this.#running) {
       this.#currentSession.followUp(prompt.trim());
-      this.#messages.push({
-        id: `queued-${Date.now()}`,
-        kind: "status",
-        title: "queued follow-up",
-        lines: [prompt.trim()],
-      });
+      this.#conversation.addStatus(this.#nextBlockId("status"), "queued follow-up", [prompt.trim()]);
       this.#host.requestRender();
       return;
     }
@@ -1067,40 +1027,15 @@ export class CliTuiApp {
   }
 
   #pushUserBlock(text: string): void {
-    this.#messages.push({
-      id: `user-${Date.now()}`,
-      kind: "user",
-      title: "you",
-      lines: wrapText(text, 120),
-    });
+    this.#showWelcomeBanner = false;
+    this.#conversation.pushUserMessage(this.#nextBlockId("user"), text);
   }
 
   #renderConversation(width: number): string[] {
-    const lines: string[] = [];
-    const blocks = this.#messages;
-    if (blocks.length === 0) {
-      lines.push("No messages yet. Type a prompt or /help.");
-      return lines;
-    }
-
-    for (const block of blocks.slice(-12)) {
-      lines.push(`[${block.kind}] ${block.title}`);
-      const bodyLines = block.text !== undefined && block.kind === "assistant"
-        ? wrapText(block.text, Math.max(20, width - 4))
-        : block.lines;
-      for (const line of bodyLines) {
-        const wrapped = wrapText(line, Math.max(20, width - 4));
-        for (const entry of wrapped) {
-          lines.push(`  ${truncateToWidth(entry, Math.max(20, width - 2))}`);
-        }
-      }
-      if (block.live) {
-        lines.push("  ...");
-      }
-      lines.push("");
-    }
-
-    return lines.slice(0, Math.max(1, this.#terminal.size.rows - 8));
+    return this.#conversation.render(width, {
+      detailed: this.#detailedTranscript,
+      maxBlocks: this.#running ? 12 : 32,
+    });
   }
 
   #renderPanel(width: number): string[] {
@@ -1112,7 +1047,12 @@ export class CliTuiApp {
       return [];
     }
     if (panel.kind === "text") {
-      return new Box(new StaticLines(panel.lines), panel.title).render(width);
+      const maxLines = Math.max(4, this.#terminal.size.rows - 12);
+      const lines = panel.lines.slice(0, maxLines);
+      if (panel.lines.length > maxLines) {
+        lines.push("...");
+      }
+      return new Box(new StaticLines(lines), panel.title).render(width);
     }
     const selected = panel.items[panel.selectedIndex] ?? panel.items[0];
     const listLines = [
@@ -1143,11 +1083,16 @@ export class CliTuiApp {
     const selected = approval.items[approval.selectedIndex] ?? approval.items[0];
     const lines = [
       `tool: ${prompt.toolName}`,
-      `reason: ${prompt.reason}`,
-      `policy: ${prompt.policyEffect}`,
       `principal: ${prompt.principalId}`,
+      `policy: ${prompt.policyEffect}`,
+      ...(prompt.policyObligations && prompt.policyObligations.length > 0 ? [`obligations: ${prompt.policyObligations.length}`] : []),
+      ...(prompt.source !== undefined ? [`source: ${prompt.source}`] : []),
+      ...(prompt.risk !== undefined ? [`risk: ${prompt.risk}`] : []),
+      ...(prompt.normalizedResource !== undefined
+        ? [`resource: ${prompt.normalizedResource}`]
+        : [`resource: ${prompt.resourceScope}`]),
       `action: ${prompt.actionKind}`,
-      `resource: ${prompt.resourceScope}`,
+      `reason: ${prompt.reason}`,
       `input: ${formatToolInput(prompt.input)}`,
       "",
       ...new SelectList(items, "approval choices").render(width),
@@ -1156,6 +1101,28 @@ export class CliTuiApp {
       "Use Up/Down or 1/2/3, then Enter. Esc denies.",
     ];
     return new Box(new StaticLines(lines), "approval").render(width);
+  }
+
+  #renderFooter(snapshot: CliRuntimeSnapshot | undefined, activeModel: string, width: number): string[] {
+    const auditState = snapshot?.audit.enabled
+      ? snapshot.audit.healthy
+        ? "healthy"
+        : "unhealthy"
+      : "disabled";
+    const trustState = snapshot?.projectTrusted ? "trusted" : "untrusted";
+    const tools = this.#currentSession.state.tools?.length ?? 0;
+    const context = this.#currentSession.state.messages.length;
+    const status = this.#lastStatus;
+    const footer = truncateToWidth(
+      `state: ${this.#running ? "streaming" : "idle"} | model: ${activeModel} | audit: ${auditState} | trust: ${trustState} | tools: ${tools} | ctx: ${context} | ${status}`,
+      width,
+    );
+    return [footer];
+  }
+
+  #nextBlockId(prefix: string): string {
+    this.#blockSeq += 1;
+    return `${prefix}-${this.#blockSeq}`;
   }
 }
 

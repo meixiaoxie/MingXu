@@ -1,4 +1,4 @@
-import { clearScreenDown, emitKeypressEvents } from "node:readline";
+import { emitKeypressEvents } from "node:readline";
 
 import { CURSOR_MARKER } from "./types.js";
 import { visibleWidth } from "./strings.js";
@@ -17,6 +17,9 @@ export class ProcessTerminal {
   readonly #output: NodeJS.WriteStream;
   readonly #resizeListeners = new Set<() => void>();
   readonly #keyListeners = new Set<TerminalKeyListener>();
+  #lastFrame: readonly string[] = [];
+  #lastWidth = 0;
+  #hasRendered = false;
   #rawMode = false;
   #keypressHandler: ((sequence: string, key: import("node:readline").Key) => void) | undefined;
   #resizeHandler: (() => void) | undefined;
@@ -114,7 +117,7 @@ export class ProcessTerminal {
     this.#output.write("\r\x1b[0J");
   }
 
-  render(lines: readonly string[]): void {
+  render(lines: readonly string[], options: { readonly full?: boolean } = {}): void {
     if (!this.isTTY) {
       this.#output.write(`${lines.join("\n")}\n`);
       return;
@@ -122,14 +125,45 @@ export class ProcessTerminal {
 
     const rendered = [...lines];
     const cursorPosition = extractCursorPosition(rendered);
-    const text = rendered.join("\r\n");
-    this.#output.write("\x1b[2J\x1b[H");
+    const width = this.size.columns;
+    const forceFull = options.full === true || !this.#hasRendered || this.#lastWidth !== width;
+
+    this.#output.write("\x1b[?2026h");
     this.hideCursor();
-    this.#output.write(text);
+
+    if (forceFull) {
+      this.#output.write("\x1b[2J\x1b[H");
+      this.#output.write(rendered.join("\r\n"));
+    } else {
+      const prefix = commonPrefix(this.#lastFrame, rendered);
+      const suffix = commonSuffix(this.#lastFrame, rendered, prefix);
+      if (prefix === 0 && rendered.length === 0) {
+        this.#output.write("\x1b[H\x1b[2J");
+      } else if (rendered.length !== this.#lastFrame.length || prefix !== rendered.length) {
+        this.moveCursorTo(prefix, 0);
+        for (let row = prefix; row < rendered.length - suffix; row += 1) {
+          if (row > prefix) {
+            this.#output.write("\r\n");
+          }
+          this.clearLine();
+          this.#output.write(rendered[row] ?? "");
+        }
+        if (rendered.length < this.#lastFrame.length) {
+          this.#output.write("\x1b[0J");
+        }
+      }
+    }
+
     if (cursorPosition) {
       this.moveCursorTo(cursorPosition.row, cursorPosition.column);
-      this.showCursor();
+    } else if (rendered.length > 0) {
+      this.moveCursorTo(Math.max(0, rendered.length - 1), visibleWidth(rendered.at(-1) ?? ""));
     }
+    this.showCursor();
+    this.#output.write("\x1b[?2026l");
+    this.#lastFrame = rendered;
+    this.#lastWidth = width;
+    this.#hasRendered = true;
   }
 
   moveCursorTo(row: number, column: number): void {
@@ -137,6 +171,13 @@ export class ProcessTerminal {
       return;
     }
     this.#output.write(`\x1b[${Math.max(0, row + 1)};${Math.max(0, column + 1)}H`);
+  }
+
+  clearLine(): void {
+    if (!this.isTTY) {
+      return;
+    }
+    this.#output.write("\x1b[2K\r");
   }
 }
 
@@ -155,4 +196,26 @@ function extractCursorPosition(lines: string[]): { row: number; column: number }
     return { row, column };
   }
   return undefined;
+}
+
+function commonPrefix(left: readonly string[], right: readonly string[]): number {
+  const limit = Math.min(left.length, right.length);
+  let index = 0;
+  while (index < limit && left[index] === right[index]) {
+    index += 1;
+  }
+  return index;
+}
+
+function commonSuffix(left: readonly string[], right: readonly string[], prefix: number): number {
+  let suffix = 0;
+  const leftLimit = left.length - prefix;
+  const rightLimit = right.length - prefix;
+  while (suffix < leftLimit && suffix < rightLimit) {
+    if (left[left.length - 1 - suffix] !== right[right.length - 1 - suffix]) {
+      break;
+    }
+    suffix += 1;
+  }
+  return suffix;
 }

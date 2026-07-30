@@ -18,6 +18,7 @@
     "LICENSES"
   ],
   "dependencies": {
+    "@mingxu/tui": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "string-width": "^8.2.2",
     "zod": "^3.25.67"
@@ -27,6 +28,7 @@
     "build": "node ../../scripts/build-cli.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prepack": "pnpm build",
-    "pack:dry-run": "npm pack --dry-run"
+    "pack:staged": "node ../../scripts/pack-cli.mjs",
+    "pack:dry-run": "node ../../scripts/pack-cli.mjs --dry-run"
   }
 }

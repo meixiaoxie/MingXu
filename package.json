@@ -34,10 +34,11 @@
   ],
   "scripts": {
     "clean": "node scripts/clean-dist.mjs",
-    "build": "pnpm clean && tsc -p tsconfig.json && pnpm -C packages/cli build",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.tests.json --noEmit",
-    "typecheck:src": "tsc -p tsconfig.json --noEmit",
+    "build": "pnpm clean && pnpm -C packages/tui build && pnpm -C packages/plugin-sdk build && tsc -p tsconfig.json && pnpm -C packages/cli build",
+    "typecheck": "pnpm -C packages/tui build && pnpm -C packages/plugin-sdk build && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.tests.json --noEmit",
+    "typecheck:src": "pnpm -C packages/tui build && pnpm -C packages/plugin-sdk build && tsc -p tsconfig.json --noEmit",
     "typecheck:tests": "tsc -p tsconfig.tests.json --noEmit",
+    "pretest": "pnpm -C packages/tui build && pnpm -C packages/plugin-sdk build",
     "test": "vitest run",
     "test:smoke": "vitest run --config vitest.smoke.config.ts",
     "test:watch": "vitest",
@@ -45,6 +46,8 @@
     "pack:dry-run": "pnpm -C packages/cli pack:dry-run"
   },
   "dependencies": {
+    "@mingxu/tui": "workspace:*",
+    "@mingxu/plugin-sdk": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "string-width": "^8.2.2",
     "zod": "^3.25.67"

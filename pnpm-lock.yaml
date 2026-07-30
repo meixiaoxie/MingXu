@@ -8,6 +8,12 @@ importers:
 
   .:
     dependencies:
+      '@mingxu/plugin-sdk':
+        specifier: workspace:*
+        version: link:packages/plugin-sdk
+      '@mingxu/tui':
+        specifier: workspace:*
+        version: link:packages/tui
       '@modelcontextprotocol/sdk':
         specifier: ^1.30.0
         version: 1.30.0(zod@3.25.76)
@@ -33,6 +39,9 @@ importers:
 
   packages/cli:
     dependencies:
+      '@mingxu/tui':
+        specifier: workspace:*
+        version: link:../tui
       '@modelcontextprotocol/sdk':
         specifier: ^1.30.0
         version: 1.30.0(zod@3.25.76)
@@ -43,15 +52,27 @@ importers:
         specifier: ^3.25.67
         version: 3.25.76
 
-  packages/coding-tools: {}
+  packages/coding-tools:
+    dependencies:
+      '@mingxu/plugin-sdk':
+        specifier: workspace:*
+        version: link:../plugin-sdk
 
   packages/core: {}
 
   packages/plugin-sdk: {}
 
-  packages/tui: {}
+  packages/tui:
+    dependencies:
+      string-width:
+        specifier: ^8.2.2
+        version: 8.2.2
 
-  packages/web-search: {}
+  packages/web-search:
+    dependencies:
+      '@mingxu/plugin-sdk':
+        specifier: workspace:*
+        version: link:../plugin-sdk
 
 packages:
 

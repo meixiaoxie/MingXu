@@ -1,8 +1,7 @@
 import { clearScreenDown, emitKeypressEvents } from "node:readline";
 import { createInterface } from "node:readline/promises";
 
-import { Editor } from "../tui/components.js";
-import { CURSOR_MARKER, type KeyInput } from "../tui/types.js";
+import { Editor, CURSOR_MARKER, type KeyInput } from "@mingxu/tui";
 import { formatChatHelp, suggestChatCommands } from "./chat-commands.js";
 
 export interface ChatInputOptions {

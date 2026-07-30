@@ -20,7 +20,7 @@ export function createWebSearchPluginSkeleton(config = defaultWebSearchConfig) {
     manifest: webSearchManifest,
     config,
     setup() {
-      // 这个骨架只声明能力边界，真正的联网后端后续再接入。
+      // Skeleton only; real execution comes from a future adapter package.
     },
   } satisfies WebSearchPluginSkeleton;
 }

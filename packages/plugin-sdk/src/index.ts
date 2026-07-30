@@ -4,11 +4,17 @@ export {
   definePluginManifest,
 } from "./protocol.js";
 export type {
+  ExtensionContribution,
   ExtensionAdapterV1,
   ExtensionDescriptor,
   ExtensionInspectResult,
+  ExtensionKind,
   ExtensionLockFile,
   ExtensionLockRecord,
+  ExtensionManifestV1,
+  ExtensionPermissions,
+  ExtensionPlugin,
+  ExtensionPluginContext,
   ExtensionSource,
   ExtensionSourceKind,
   PluginApiVersion,

@@ -13,6 +13,9 @@
     "prepack": "pnpm build",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
+  "dependencies": {
+    "@mingxu/plugin-sdk": "workspace:*"
+  },
   "files": [
     "dist",
     "index.js",

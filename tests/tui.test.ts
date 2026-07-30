@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { Box, Editor, KeyValue, SelectList, Text } from "../src/tui/index.js";
-import { ProcessTerminal } from "../src/tui/terminal.js";
+import { Box, Editor, KeyValue, SelectList, Text, ProcessTerminal } from "@mingxu/tui";
 
 describe("tui components", () => {
   it("renders slash command suggestions and accepts a completion", () => {

@@ -5,8 +5,26 @@
   "type": "module",
   "description": "MingXu terminal UI package.",
   "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "node ../../scripts/clean-dist.mjs",
+    "pack:dry-run": "npm pack --dry-run",
+    "prepack": "pnpm build",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "string-width": "^8.2.2"
+  },
   "files": [
     "dist",
+    "src",
     "README.md",
     "CHANGELOG.md",
     "SECURITY.md",
