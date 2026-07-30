@@ -75,6 +75,7 @@ export class CliTuiApp {
   #lastStatus = "Idle";
   #blockSeq = 0;
   #finishResolver: ((exitCode: number) => void) | undefined;
+  #shutdownCompleted = false;
 
   constructor(options: {
     runtime: CliRuntimeContext;
@@ -105,26 +106,30 @@ export class CliTuiApp {
   }
 
   async start(initialPrompt?: string): Promise<number> {
-    await this.#refreshSnapshot();
-    if (!this.#currentModelKey && this.#snapshot) {
-      this.#currentModelKey = this.#snapshot.defaultModel;
-    }
-    this.#bindSession(this.#currentSession);
-    this.#terminal.enterRawMode();
-    this.#terminal.hideCursor();
-    this.#terminal.onKeypress((input) => this.#handleKeypress(input));
-    this.#terminal.onResize(() => this.#host.requestRender());
-    this.#host.requestRender({ full: true });
+    try {
+      await this.#refreshSnapshot();
+      if (!this.#currentModelKey && this.#snapshot) {
+        this.#currentModelKey = this.#snapshot.defaultModel;
+      }
+      this.#bindSession(this.#currentSession);
+      this.#terminal.enterRawMode();
+      this.#terminal.hideCursor();
+      this.#terminal.onKeypress((input) => this.#handleKeypress(input));
+      this.#terminal.onResize(() => this.#host.requestRender());
+      this.#host.requestRender({ full: true });
 
-    if (initialPrompt?.trim()) {
-      this.#enqueuePrompt(initialPrompt.trim());
-    }
+      if (initialPrompt?.trim()) {
+        this.#enqueuePrompt(initialPrompt.trim());
+      }
 
-    return await new Promise<number>((resolve) => {
-      this.#finishResolver = resolve;
-      this.#exitRequested = false;
-      this.#tryFinish();
-    });
+      return await new Promise<number>((resolve) => {
+        this.#finishResolver = resolve;
+        this.#exitRequested = false;
+        this.#tryFinish();
+      });
+    } finally {
+      this.#shutdown();
+    }
   }
 
   get runtimeSnapshot(): CliRuntimeSnapshot | undefined {
@@ -206,6 +211,7 @@ export class CliTuiApp {
     } catch (error) {
       this.#pushStatus(`Error: ${error instanceof Error ? error.message : String(error)}`);
       this.#conversation.addError(this.#nextBlockId("error"), "run error", redactText(error instanceof Error ? error.message : String(error)));
+      this.#handleFatalError(error);
       throw error;
     } finally {
       this.#running = false;
@@ -299,7 +305,7 @@ export class CliTuiApp {
     if (input.ctrl && input.name === "o") {
       this.#detailedTranscript = !this.#detailedTranscript;
       this.#pushStatus(this.#detailedTranscript ? "Detailed transcript on" : "Detailed transcript off");
-      this.#host.requestRender({ full: true });
+      this.#host.requestRender();
       return;
     }
 
@@ -678,13 +684,7 @@ export class CliTuiApp {
       ...input,
     ];
 
-    const maxRows = this.#terminal.size.rows || 24;
-    if (lines.length <= maxRows) {
-      return lines;
-    }
-
-    const tail = lines.slice(Math.max(0, lines.length - maxRows));
-    return tail;
+    return lines;
   }
 
   async #refreshSnapshot(): Promise<void> {
@@ -701,7 +701,7 @@ export class CliTuiApp {
   #bindSession(session: AgentSession): void {
     this.#sessionSubscription?.();
     this.#sessionSubscription = session.subscribe((event) => {
-      void this.#handleAgentEvent(event);
+      void this.#handleAgentEvent(event).catch((error) => this.#handleFatalError(error));
     });
   }
 
@@ -778,6 +778,17 @@ export class CliTuiApp {
     }
   }
 
+  #handleFatalError(error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    this.#running = false;
+    this.#conversation.addError(this.#nextBlockId("error"), "fatal error", redactText(message));
+    this.#exitRequested = true;
+    const resolve = this.#finishResolver;
+    this.#finishResolver = undefined;
+    this.#shutdown();
+    resolve?.(1);
+  }
+
   #handleKeypress(input: { sequence: string; name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean }): void {
     if (this.#approval) {
       this.#handleApprovalInput(input);
@@ -818,7 +829,7 @@ export class CliTuiApp {
       this.#approval = undefined;
       approval.resolve(undefined);
       this.#conversation.addApprovalResult(this.#nextBlockId("approval"), approval.prompt, undefined);
-      this.#host.requestRender({ full: true });
+      this.#host.requestRender();
       return;
     }
     if (input.sequence === "1") {
@@ -834,7 +845,7 @@ export class CliTuiApp {
       this.#approval = undefined;
       approval.resolve(item?.value);
       this.#conversation.addApprovalResult(this.#nextBlockId("approval"), approval.prompt, item?.value);
-      this.#host.requestRender({ full: true });
+      this.#host.requestRender();
     }
   }
 
@@ -851,7 +862,7 @@ export class CliTuiApp {
     }
     if (input.name === "escape" || (input.ctrl && input.name === "c")) {
       this.#activePanel = undefined;
-      this.#host.requestRender({ full: true });
+      this.#host.requestRender();
       return;
     }
     if (input.name === "enter" || input.name === "return") {
@@ -942,7 +953,7 @@ export class CliTuiApp {
           "Try /status, /extensions, or /agents to inspect the runtime.",
         ]);
         this.#showWelcomeBanner = true;
-        this.#host.requestRender({ full: true });
+        this.#host.requestRender();
         return;
       case "compact":
         this.#conversation.addStatus(this.#nextBlockId("status"), "compact", ["Conversation compaction is managed by the runtime."]);
@@ -990,7 +1001,7 @@ export class CliTuiApp {
     ]);
     this.#bindSession(this.#currentSession);
     await this.#refreshSnapshot();
-    this.#host.requestRender({ full: true });
+    this.#host.requestRender();
   }
 
   #enqueuePrompt(prompt: string): void {
@@ -1010,6 +1021,10 @@ export class CliTuiApp {
   }
 
   #shutdown(): void {
+    if (this.#shutdownCompleted) {
+      return;
+    }
+    this.#shutdownCompleted = true;
     this.#terminal.showCursor();
     this.#terminal.restore();
     this.#sessionSubscription?.();
@@ -1034,7 +1049,6 @@ export class CliTuiApp {
   #renderConversation(width: number): string[] {
     return this.#conversation.render(width, {
       detailed: this.#detailedTranscript,
-      maxBlocks: this.#running ? 12 : 32,
     });
   }
 
