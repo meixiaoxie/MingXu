@@ -32,7 +32,7 @@ export class TuiHost {
   }
 
   renderNow(): void {
-    this.#terminal.render(this.#root.render(this.#terminal.size.columns), { full: this.#forceFullRender });
+    this.#terminal.render(this.#root.render(this.#terminal.size.columns, this.#terminal.size.rows), { full: this.#forceFullRender });
     this.#forceFullRender = false;
   }
 }

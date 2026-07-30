@@ -174,4 +174,114 @@ describe("CliTuiApp", () => {
     app.handleInput({ sequence: "", name: "enter" });
     await expect(approval).resolves.toMatchObject({ decision: "allow" });
   });
+
+  it("keeps approval above browse panels and filters session selectors", async () => {
+    const runtime: CliRuntimeContext = {
+      createSession: () => createFakeSession(),
+      listSessions: async () => "session-1\tactive\t2026-07-29T00:00:00.000Z",
+      listRecentSessions: async () => ([
+        { sessionId: "alpha-1", state: "active", updatedAt: "2026-07-29T00:00:00.000Z" },
+        { sessionId: "beta-2", state: "active", updatedAt: "2026-07-29T00:00:00.000Z" },
+      ]),
+      snapshot: async () => ({
+        ...createRuntimeSnapshot(),
+        sessions: [
+          { sessionId: "alpha-1", state: "active", updatedAt: "2026-07-29T00:00:00.000Z" },
+          { sessionId: "beta-2", state: "active", updatedAt: "2026-07-29T00:00:00.000Z" },
+        ],
+      }),
+      close: async () => undefined,
+    };
+    const app = new CliTuiApp({
+      runtime,
+      terminal: createFakeTerminal(),
+      session: createFakeSession(),
+      modelKey: "primary",
+      sessionId: "session-1",
+    });
+
+    await app.refreshSnapshot();
+    await app.openHelpPanel();
+    const approval = app.openApproval({
+      toolName: "readFile",
+      toolCallId: "tool-1",
+      principalId: "local-user",
+      requestFingerprint: "fingerprint",
+      actionKind: "tool.call",
+      resourceScope: "file",
+      reason: "need approval",
+      input: { path: "README.md" },
+      policyEffect: "ask",
+    });
+    const approvalFrame = app.render(80).join("\n");
+    expect(approvalFrame).toContain("Allow once");
+    expect(approvalFrame).not.toContain("Commands:");
+    app.handleInput({ sequence: "", name: "enter" });
+    await expect(approval).resolves.toMatchObject({ decision: "allow" });
+
+    await app.openSessionsPanel();
+    app.handleInput({ sequence: "b", name: "b" });
+    app.handleInput({ sequence: "e", name: "e" });
+    const filtered = app.render(80).join("\n");
+    expect(filtered).toContain("beta-2");
+    expect(filtered).not.toContain("alpha-1");
+  });
+
+  it("shows unknown commands as transient composer notices", async () => {
+    const runtime: CliRuntimeContext = {
+      createSession: () => createFakeSession(),
+      listSessions: async () => "",
+      listRecentSessions: async () => [],
+      snapshot: async () => createRuntimeSnapshot(),
+      close: async () => undefined,
+    };
+    const app = new CliTuiApp({
+      runtime,
+      terminal: createFakeTerminal(),
+      session: createFakeSession(),
+      modelKey: "primary",
+      sessionId: "session-1",
+    });
+
+    await app.refreshSnapshot();
+    await app.handleSubmit("/does-not-exist");
+    const rendered = app.render(80).join("\n");
+    expect(rendered).toContain("Unknown command /does-not-exist");
+    expect(rendered).not.toContain("run error");
+    expect(rendered).not.toContain("unknown command");
+  });
+
+  it("restores a browse panel after closing a pushed detail overlay", async () => {
+    const runtime: CliRuntimeContext = {
+      createSession: () => createFakeSession(),
+      listSessions: async () => "",
+      listRecentSessions: async () => [],
+      snapshot: async () => createRuntimeSnapshot(),
+      close: async () => undefined,
+    };
+    const app = new CliTuiApp({
+      runtime,
+      terminal: createFakeTerminal(),
+      session: createFakeSession(),
+      modelKey: "primary",
+      sessionId: "session-1",
+    });
+
+    await app.refreshSnapshot();
+    await app.openExtensionsPanel();
+    expect(app.activePanel?.kind).toBe("select");
+    expect(app.render(80).join("\n")).toContain("preset coding");
+
+    app.handleInput({ sequence: "", name: "enter" });
+    expect(app.activePanel?.kind).toBe("text");
+    expect(app.render(80).join("\n")).toContain("Coding preset");
+
+    app.handleInput({ sequence: "", name: "escape" });
+    expect(app.activePanel?.kind).toBe("select");
+    const restored = app.render(80).join("\n");
+    expect(restored).toContain("extensions");
+    expect(restored).toContain("preset coding");
+    expect(restored).toContain("showing 1-4 of 4");
+    expect(restored).not.toContain("title: preset coding");
+  });
 });

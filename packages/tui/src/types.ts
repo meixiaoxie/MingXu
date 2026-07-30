@@ -7,7 +7,7 @@ export interface KeyInput {
 }
 
 export interface Component {
-  render(width: number): string[];
+  render(width: number, height?: number): string[];
   handleInput?(input: KeyInput): ComponentAction | void;
   invalidate(): void;
 }
@@ -20,6 +20,11 @@ export type ComponentAction =
 export interface OverlayHandle {
   hide(): void;
   isVisible(): boolean;
+}
+
+export interface OverlayFrame extends Component {
+  readonly id: string;
+  readonly priority: number;
 }
 
 export const CURSOR_MARKER = "\u001b_pi:c\u0007";
