@@ -11,6 +11,7 @@ describe("file access normalizer", () => {
     const root = await mkdtemp(join(tmpdir(), "mingxu-policy-file-"));
     const target = join(root, "note.txt");
     await writeFile(target, "hello", "utf8");
+    const canonicalTarget = await realpath(target);
 
     try {
       const request = await normalizeFileAccess({
@@ -30,7 +31,7 @@ describe("file access normalizer", () => {
         throw new Error("Expected a file resource");
       }
       expect(request.resource.resolvedPath).toBe(target);
-      expect(request.resource.caseNormalizedPath).toBe(target.replace(/\\/gu, "/").toLowerCase());
+      expect(request.resource.caseNormalizedPath).toBe(canonicalTarget.replace(/\\/gu, "/").toLowerCase());
     } finally {
       await rm(root, { recursive: true, force: true });
     }
