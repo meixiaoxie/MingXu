@@ -23,7 +23,7 @@ jobs:
 
       - name: Set up pnpm
         # pnpm/action-setup v4
-        uses: pnpm/action-setup@fe02b2b198060655c91e734aa9d15097341251d0
+        uses: pnpm/action-setup@v6
         with:
           run_install: false
 
