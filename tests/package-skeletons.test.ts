@@ -20,16 +20,23 @@ describe("extension package skeletons", () => {
     expect(source).toContain("export interface ExtensionAdapterV1");
   });
 
-  it("keeps coding-tools as an independent optional plugin skeleton", async () => {
+  it("keeps coding-tools as an independent optional plugin package", async () => {
     await expect(stat(join(root, "packages", "coding-tools", "mingxu.plugin.json"))).resolves.toMatchObject({ size: expect.any(Number) });
     await expect(stat(join(root, "packages", "coding-tools", "index.js"))).resolves.toMatchObject({ size: expect.any(Number) });
+    await expect(stat(join(root, "packages", "coding-tools", "runtime.js"))).resolves.toMatchObject({ size: expect.any(Number) });
+    const packageJson = JSON.parse(await readText("packages/coding-tools/package.json")) as { readonly description?: string; readonly files?: string[] };
     const manifest = await readText("packages/coding-tools/src/manifest.ts");
     const entry = await readText("packages/coding-tools/src/index.ts");
-    expect(manifest).toContain("mingxu-coding-tools");
-    expect(manifest).toContain("read");
-    expect(manifest).toContain("command");
-    expect(entry).toContain("createCodingToolsPluginSkeleton");
-    expect(entry).toContain("codingToolsPluginSkeleton");
+    const runtime = await readText("packages/coding-tools/runtime.js");
+    expect(packageJson.description).toBe("Standalone official MingXu coding tools plugin.");
+    expect(packageJson.files).toContain("runtime.js");
+    expect(manifest).toContain("codingToolsManifest");
+    expect(entry).toContain("createCodingToolsPlugin");
+    expect(entry).toContain("codingToolsPlugin");
+    expect(runtime).toContain("mingxu-coding-tools");
+    expect(runtime).toContain('entry: "index.js"');
+    expect(runtime).toContain("command requires argv");
+    expect(runtime).toContain("maxOutputBytes");
   });
 
   it("creates the web-search package skeleton for future adapters", async () => {

@@ -6,7 +6,7 @@
   "kind": "tool",
   "adapterId": "mingxu-native",
   "entry": "index.js",
-  "description": "Official coding tools plugin skeleton for workspace-scoped file and command actions.",
+  "description": "Official coding tools plugin for workspace-scoped file and command actions.",
   "permissions": {
     "files": "write",
     "commands": "allow",
