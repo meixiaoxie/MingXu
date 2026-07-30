@@ -194,14 +194,6 @@ function extractPluginMetadata(plugin: Plugin): PluginMetadata {
 
 function validatePluginMetadata(source: ResolvedPluginSource, metadata: PluginMetadata): void {
   const declaredKind = metadata.kind ?? metadata.manifest?.kind;
-  if (declaredKind !== undefined && declaredKind !== "tool") {
-    throw new Error(`Plugin kind '${declaredKind}' is not executable in stage 8`);
-  }
-
-  if (source.kind !== undefined && source.kind !== "tool") {
-    throw new Error(`Plugin kind '${source.kind}' is not executable in stage 8`);
-  }
-
   if (source.kind !== undefined && declaredKind !== undefined && source.kind !== declaredKind) {
     throw new Error(`Plugin kind mismatch: requested ${source.kind}, module declared ${declaredKind}`);
   }

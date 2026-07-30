@@ -59,7 +59,7 @@ const pluginPermissionsSchema = z.object({
 const pluginManifestSchema = z.object({
   name: identifierSchema,
   version: identifierSchema,
-  kind: z.enum(["tool", "provider", "memory", "policy", "audit", "context", "preset"]),
+  kind: z.enum(["tool", "provider", "memory", "policy", "audit", "context", "preset", "skill", "resource"]),
   permissions: pluginPermissionsSchema.optional(),
 }).strict();
 
@@ -167,7 +167,7 @@ const pluginEntrySchema = z.union([
   z.object({
     path: identifierSchema,
     trust: pluginTrustSchema.default("trusted_local"),
-    kind: z.enum(["tool", "provider", "memory", "policy", "audit", "context", "preset"]).optional(),
+    kind: z.enum(["tool", "provider", "memory", "policy", "audit", "context", "preset", "skill", "resource"]).optional(),
     manifest: identifierSchema.optional(),
     permissions: pluginPermissionsSchema.optional(),
   }).strict(),

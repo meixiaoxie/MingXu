@@ -6,11 +6,11 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import {
-  createReadFileTool,
   defineTool,
-  echoTool,
   ToolRegistry,
 } from "../src/index.js";
+import { echoTool } from "../src/tools/builtin/echo-tool.js";
+import { createReadFileTool } from "../src/tools/builtin/read-file-tool.js";
 
 describe("ToolRegistry", () => {
   it("registers, finds, lists, and executes a tool", async () => {

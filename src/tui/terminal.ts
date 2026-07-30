@@ -123,7 +123,7 @@ export class ProcessTerminal {
     const rendered = [...lines];
     const cursorPosition = extractCursorPosition(rendered);
     const text = rendered.join("\r\n");
-    this.clearActiveRegion();
+    this.#output.write("\x1b[2J\x1b[H");
     this.hideCursor();
     this.#output.write(text);
     if (cursorPosition) {

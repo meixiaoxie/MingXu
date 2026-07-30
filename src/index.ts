@@ -103,17 +103,8 @@ export {
   executeToolLifecycle,
   ToolExecutor,
   ToolRegistry,
-  echoTool,
-  createLoadResourceTool,
-  createMemoryDeleteTool,
-  createMemorySaveTool,
-  createMemorySearchTool,
-  createReadFileTool,
-  readFileTool,
-  createSpawnSubagentTool,
 } from "./tools/index.js";
 export type {
-  ReadFileToolOptions,
   RuntimeTool,
   RuntimeToolDefinition,
 } from "./tools/index.js";
@@ -137,7 +128,16 @@ export type {
   SessionTurnRecord,
 } from "./session/index.js";
 export { definePlugin, PluginLoader } from "./plugins/index.js";
-export type { Plugin, PluginContext } from "./plugins/index.js";
+export type {
+  Plugin,
+  PluginContext,
+  PluginKind,
+  PluginManifestV1,
+  PluginPermissions,
+  PresentationBlock,
+  PresentationBlockKind,
+  PresentationBlockState,
+} from "./plugins/index.js";
 export {
   agentConfigSchema,
   customProviderConfigSchema,

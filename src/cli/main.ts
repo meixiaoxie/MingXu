@@ -12,11 +12,8 @@ import { registerBuiltinProviders } from "../models/provider-catalog.js";
 import { createRuntimeModelProvider } from "../models/model-runtime.js";
 import { createRuntimeStreamFn } from "../models/request-builder.js";
 import { PluginLoader, resolvePluginLoadRequest } from "../plugins/plugin-loader.js";
-import { echoTool } from "../tools/builtin/echo-tool.js";
 import { createLoadResourceTool } from "../tools/builtin/load-resource-tool.js";
-import { createMemoryDeleteTool, createMemorySaveTool, createMemorySearchTool } from "../tools/builtin/memory-tools.js";
 import { createSpawnSubagentTool } from "../tools/builtin/spawn-subagent-tool.js";
-import { readFileTool } from "../tools/builtin/read-file-tool.js";
 import { ToolRegistry } from "../tools/tool-registry.js";
 import { parseArgs } from "./parse-args.js";
 import { discoverCliConfig, getGlobalConfigPath, getProjectConfigPath, setProjectTrust } from "./config-discovery.js";
@@ -432,14 +429,7 @@ function createDefaultRunner(
     const presetRegistry = new AgentPresetRegistry();
     loadConfiguredPresets(presetRegistry, config);
 
-    const toolRegistry = new ToolRegistry([
-      echoTool,
-      readFileTool,
-      createLoadResourceTool({ resourceLoader }),
-      createMemorySearchTool(memoryManager),
-      createMemorySaveTool(memoryManager),
-      createMemoryDeleteTool(memoryManager),
-    ]);
+    const toolRegistry = new ToolRegistry();
 
     const providerRegistry = registerBuiltinProviders(new ProviderRegistry(), config.providerAliases);
     if (config.customProviderModule !== undefined) {
@@ -535,14 +525,18 @@ function createDefaultRunner(
         }),
         ...(config.subagents !== undefined ? config.subagents : {}),
       });
-      if (presetRegistry.list().length > 0 || config.defaultPreset !== undefined) {
+      if (config.subagents?.enabled === true && (presetRegistry.list().length > 0 || config.defaultPreset !== undefined)) {
         toolRegistry.register(createSpawnSubagentTool({
           manager: subagentManager,
           ...(config.defaultPreset !== undefined ? { defaultPreset: config.defaultPreset } : {}),
         }));
       }
 
-      const sessionTools = selectedPreset ? filterPresetTools(selectedPreset, toolRegistry.list()) : [...toolRegistry.list()];
+      const runtimeTools = [...toolRegistry.list()];
+      if (resourceRegistry.list().length > 0) {
+        runtimeTools.push(createLoadResourceTool({ resourceLoader }));
+      }
+      const sessionTools = selectedPreset ? filterPresetTools(selectedPreset, runtimeTools) : runtimeTools;
       const sessionSystemPrompt = combinePrompts(instructionPrompt, selectedPreset?.systemPrompt);
       const session = new AgentSession({
         model: runtimeModel,
@@ -604,13 +598,7 @@ async function createCliRuntimeContext(options: {
   const presetRegistry = new AgentPresetRegistry();
   loadConfiguredPresets(presetRegistry, options.config);
 
-  const toolRegistry = new ToolRegistry([
-    echoTool,
-    readFileTool,
-    createMemorySearchTool(memoryManager),
-    createMemorySaveTool(memoryManager),
-    createMemoryDeleteTool(memoryManager),
-  ]);
+  const toolRegistry = new ToolRegistry();
 
   const providerRegistry = registerBuiltinProviders(new ProviderRegistry(), options.config.providerAliases);
   if (options.config.customProviderModule !== undefined) {
@@ -662,7 +650,7 @@ async function createCliRuntimeContext(options: {
     },
     ...(options.config.subagents !== undefined ? options.config.subagents : {}),
   });
-  if (presetRegistry.list().length > 0 || options.config.defaultPreset !== undefined) {
+  if (options.config.subagents?.enabled === true && (presetRegistry.list().length > 0 || options.config.defaultPreset !== undefined)) {
     toolRegistry.register(createSpawnSubagentTool({
       manager: subagentManager,
       ...(options.config.defaultPreset !== undefined ? { defaultPreset: options.config.defaultPreset } : {}),

@@ -27,6 +27,7 @@ interface ConversationBlock {
   readonly id: string;
   readonly kind: "user" | "assistant" | "tool" | "status" | "error";
   title: string;
+  text?: string;
   lines: string[];
   live?: boolean;
 }
@@ -676,6 +677,7 @@ export class CliTuiApp {
           id: this.#currentAssistantBlockId,
           kind: "assistant",
           title: "assistant",
+          text: "",
           lines: [],
           live: true,
         });
@@ -697,7 +699,8 @@ export class CliTuiApp {
       if (delta?.type === "text_delta" && typeof delta.text === "string") {
         const block = this.#messages.find((item) => item.id === this.#currentAssistantBlockId);
         if (block) {
-          block.lines.push(delta.text);
+          block.text = `${block.text ?? ""}${delta.text}`;
+          block.lines = [block.text];
         }
       }
       this.#host.requestRender();
@@ -709,7 +712,8 @@ export class CliTuiApp {
       if (block) {
         block.live = false;
         block.title = event.message.role === "assistant" ? "MingXu" : event.message.role;
-        block.lines = event.message.content ? wrapText(event.message.content, 120) : block.lines;
+        block.text = event.message.content ?? block.text;
+        block.lines = block.text ? wrapText(block.text, 120) : block.lines;
       }
       this.#host.requestRender();
       return;
@@ -1066,7 +1070,10 @@ export class CliTuiApp {
 
     for (const block of blocks.slice(-12)) {
       lines.push(`[${block.kind}] ${block.title}`);
-      for (const line of block.lines) {
+      const bodyLines = block.text !== undefined && block.kind === "assistant"
+        ? wrapText(block.text, Math.max(20, width - 4))
+        : block.lines;
+      for (const line of bodyLines) {
         const wrapped = wrapText(line, Math.max(20, width - 4));
         for (const entry of wrapped) {
           lines.push(`  ${truncateToWidth(entry, Math.max(20, width - 2))}`);

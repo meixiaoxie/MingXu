@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { Box, Editor, KeyValue, SelectList, Text } from "../src/tui/index.js";
+import { ProcessTerminal } from "../src/tui/terminal.js";
 
 describe("tui components", () => {
   it("renders slash command suggestions and accepts a completion", () => {
@@ -38,5 +39,32 @@ describe("tui components", () => {
     expect(text.render(20)).toEqual(["Hello MingXu"]);
     expect(list.render(20).join("\n")).toContain("> Two");
   });
-});
 
+  it("ProcessTerminal 会在 TTY 重绘时回到屏幕顶部", () => {
+    const writes: string[] = [];
+    const output = {
+      isTTY: true,
+      columns: 80,
+      rows: 24,
+      write(chunk: string) {
+        writes.push(chunk);
+      },
+      on() {},
+      off() {},
+    } as unknown as NodeJS.WriteStream;
+    const input = {
+      isTTY: true,
+      resume() {},
+      setRawMode() {},
+      on() {},
+      off() {},
+    } as unknown as NodeJS.ReadStream;
+    const terminal = new ProcessTerminal(input, output);
+
+    terminal.render(["first frame"]);
+    terminal.render(["second frame"]);
+
+    expect(writes.join("")).toContain("\u001b[H");
+    expect(writes.join("")).toContain("second frame");
+  });
+});

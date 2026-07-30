@@ -1,6 +1,6 @@
 {
   "name": "mingxu",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "A lightweight TypeScript agent runtime and local CLI skeleton.",
@@ -12,7 +12,7 @@
     "mingxu": "./dist/cli/entry.js"
   },
   "engines": {
-    "node": ">=22.0.0",
+    "node": ">=22.19.0",
     "pnpm": ">=10.0.0"
   },
   "main": "./dist/index.js",

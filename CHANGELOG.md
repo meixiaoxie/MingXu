@@ -26,6 +26,17 @@ _Released 2026-07-29._
 - Added a current-runtime characterization test to pin the existing CLI/session/public API baseline before the rewrite stages start.
 - Added stage 6 compaction plumbing for long contexts, including automatic summary compression, overflow recovery, and branch-aware context rebuilding.
 
+## 0.4.0
+
+_Released 2026-07-30._
+
+- Reframed MingXu as a general Agent brain with no default file or command tools.
+- Removed built-in tool registration from the CLI default path so a fresh install starts with a zero-tool baseline.
+- Expanded the plugin surface with `skill` and `resource` manifest kinds plus plugin API v1 presentation types.
+- Relaxed plugin loader metadata validation so non-tool manifests can be loaded as first-class plugin metadata.
+- Moved `@mingxu/plugin-sdk` toward a dedicated plugin-focused entry point.
+- Bumped the package version to `0.4.0` and updated install/package smoke coverage to match the new default behavior.
+
 ## 0.3.0
 
 _Released 2026-07-29._

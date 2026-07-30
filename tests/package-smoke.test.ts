@@ -201,7 +201,7 @@ describe("packed CLI and public API smoke path", () => {
 
     const versionResult = await runNode([entryPath, "--version"], installDirectory);
     expect(versionResult.exitCode, versionResult.stderr).toBe(0);
-    expect(versionResult.stdout.trim()).toBe("0.3.0");
+    expect(versionResult.stdout.trim()).toBe("0.4.0");
   }, 20_000);
 
   it("completes an offline init -> run -> doctor -> audit loop from the packed tarball", async () => {
@@ -253,15 +253,11 @@ describe("packed CLI and public API smoke path", () => {
       "        provider: 'local-test',",
       "        capabilities: this.capabilities,",
       "        async generate(request) {",
-      "          const lastMessage = request.messages.at(-1);",
-      "          if (lastMessage?.role === 'tool') {",
-      "            return { text: `final:${lastMessage.content}`, toolCalls: [] };",
-      "          }",
-      "          const history = request.messages.filter((message) => message.role === 'user').map((message) => message.content).join('|');",
-      "          return {",
-      "            text: '',",
-      "            toolCalls: [{ id: `tool-${request.messages.length}`, name: 'echo', input: { message: history } }],",
-      "          };",
+      "          const history = request.messages",
+      "            .filter((message) => message.role === 'user')",
+      "            .map((message) => message.content)",
+      "            .join('|');",
+      "          return { text: `final:${history}`, toolCalls: [] };",
       "        },",
       "      };",
       "    },",
@@ -312,8 +308,6 @@ describe("packed CLI and public API smoke path", () => {
     const auditSource = await readFile(auditPath, "utf8");
     expect(auditSource).toContain("run.start");
     expect(auditSource).toContain("run.end");
-    expect(auditSource).toContain("policy.decision");
-    expect(auditSource).toContain("tool.call.start");
-    expect(auditSource).toContain("tool.call.end");
+    expect(auditSource).toContain("model.request.start");
   });
 });

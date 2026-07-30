@@ -147,7 +147,7 @@ describe("PluginLoader", () => {
     expect(loader.list().map((plugin) => plugin.name)).toEqual(["duplicate-plugin"]);
   });
 
-  it("rejects executable plugins whose manifest kind is not supported in stage 8", async () => {
+  it("accepts non-tool manifest kinds as plugin metadata", async () => {
     const root = await createTempRoot("mingxu-plugin-loader-");
     const modulePath = await writePluginModule(root, "preset-plugin.mjs", `
       export default {
@@ -158,9 +158,10 @@ describe("PluginLoader", () => {
     `);
     const loader = new PluginLoader({ registerTool() {} });
 
-    await expect(loader.load({ path: modulePath, kind: "preset", manifest: "preset-plugin" })).rejects.toThrow(
-      "Plugin kind 'preset' is not executable in stage 8",
-    );
+    await expect(loader.load({ path: modulePath, kind: "preset", manifest: "preset-plugin" })).resolves.toMatchObject({
+      name: "preset-plugin",
+    });
+    expect(loader.list().map((plugin) => plugin.name)).toEqual(["preset-plugin"]);
   });
 
   it("propagates setup failures without leaving a half-registered plugin", async () => {
