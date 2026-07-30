@@ -14,6 +14,7 @@ export interface CliArguments {
   readonly debugProvider?: boolean;
   readonly continueMode?: boolean;
   readonly yes?: boolean;
+  readonly force?: boolean;
   readonly scope?: "user" | "project";
   readonly noGlobalConfig?: boolean;
   readonly trustProject?: boolean;
@@ -39,6 +40,7 @@ export function parseArgs(argv: readonly string[]): CliArguments {
   let debugProvider = false;
   let continueMode = false;
   let yes = false;
+  let force = false;
   let scope: CliArguments["scope"];
   let noGlobalConfig = false;
   let trustProject = false;
@@ -84,6 +86,8 @@ export function parseArgs(argv: readonly string[]): CliArguments {
       continueMode = true;
     } else if (argument === "--yes" || argument === "-y") {
       yes = true;
+    } else if (argument === "--force" || argument === "-f") {
+      force = true;
     } else if (argument === "--scope") {
       const value = readOptionValue(argv, ++index, argument);
       if (value !== "user" && value !== "project") {
@@ -148,6 +152,7 @@ export function parseArgs(argv: readonly string[]): CliArguments {
     ...(debugProvider ? { debugProvider } : {}),
     ...(continueMode ? { continueMode } : {}),
     ...(yes ? { yes } : {}),
+    ...(force ? { force } : {}),
     ...(scope !== undefined ? { scope } : {}),
     ...(noGlobalConfig ? { noGlobalConfig } : {}),
     ...(trustProject ? { trustProject } : {}),

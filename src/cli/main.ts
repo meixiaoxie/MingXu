@@ -1,5 +1,5 @@
 import { dirname, isAbsolute, resolve } from "node:path";
-import { access, writeFile } from "node:fs/promises";
+import { access, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 
 import { AgentSession } from "../core/agent-session.js";
@@ -66,7 +66,7 @@ export interface CliDependencies {
   debugProvider?: boolean;
 }
 
-const HELP_TEXT = `Usage: mingxu [options] [prompt]\n\nCommands:\n  init                    Create a starter config\n  chat [prompt]           Enter interactive chat mode\n  doctor                  Check config, env, plugins, session, and audit wiring\n  resume [sessionId]      Resume a saved session and continue with a new prompt\n  sessions                List recent sessions\n  extensions [action]     Inspect and manage installed extensions\n\nExtensions actions:\n  inspect <source>        Inspect an extension source without installing\n  add <source>            Install an extension as disabled by default\n  update <id> [source]    Update an installed extension\n  enable <id>             Enable an installed extension\n  disable <id>            Disable an installed extension\n  remove <id>             Remove a disabled extension\n  list                    List installed extensions\n  doctor                  Diagnose extension installation health\n  init <directory>        Create an extension skeleton\n\nOptions:\n  -c, --config <path>     JSON configuration file\n  -p, --prompt <text>     Prompt to send to the agent\n  -m, --model <name>      Named model from config.models\n      --continue          Resume the latest session in the current workspace\n      --yes               Skip confirmation for extension install/update\n      --temporary         Apply enable/disable only for the current process\n      --scope <scope>     Target extension scope: user or project\n      --global            Write init output to the global config location\n      --project           Write init output to the project config location\n      --no-global-config  Ignore the global config layer\n      --trust-project     Trust the detected project config layer\n      --no-trust-project  Ignore the detected project config layer\n      --profile <name>    Init profile: minimal or secure-local\n      --plain             Disable ANSI styling in the interactive transcript\n      --online            Allow doctor to perform a live provider connectivity probe\n      --debug-provider    Print resolved provider config and request diagnostics to stderr\n  -h, --help              Show this help\n  -v, --version           Show the version\n`;
+const HELP_TEXT = `Usage: mingxu [options] [prompt]\n\nCommands:\n  init                    Create a starter config\n  chat [prompt]           Enter interactive chat mode\n  doctor                  Check config, env, plugins, session, and audit wiring\n  resume [sessionId]      Resume a saved session and continue with a new prompt\n  sessions                List recent sessions\n  extensions [action]     Inspect and manage installed extensions\n\nExtensions actions:\n  inspect <source>        Inspect an extension source without installing\n  add <source>            Install an extension as disabled by default\n  update <id> [source]    Update an installed extension\n  enable <id>             Enable an installed extension\n  disable <id>            Disable an installed extension\n  remove <id>             Remove a disabled extension\n  list                    List installed extensions\n  doctor                  Diagnose extension installation health\n  init <directory>        Create an extension skeleton\n\nOptions:\n  -c, --config <path>     JSON configuration file\n  -p, --prompt <text>     Prompt to send to the agent\n  -m, --model <name>      Named model from config.models\n      --continue          Resume the latest session in the current workspace\n      --yes               Skip confirmation for extension install/update\n      --force             Back up and overwrite an existing init config\n      --temporary         Apply enable/disable only for the current process\n      --scope <scope>     Target extension scope: user or project\n      --global            Write init output to the global config location\n      --project           Write init output to the project config location\n      --no-global-config  Ignore the global config layer\n      --trust-project     Trust the detected project config layer\n      --no-trust-project  Ignore the detected project config layer\n      --profile <name>    Init profile: minimal or secure-local\n      --plain             Disable ANSI styling in the interactive transcript\n      --online            Allow doctor to perform a live provider connectivity probe\n      --debug-provider    Print resolved provider config and request diagnostics to stderr\n  -h, --help              Show this help\n  -v, --version           Show the version\n`;
 
 type MutableInstructionLoaderOptions = {
   systemPrompt?: string;
@@ -107,7 +107,7 @@ export async function main(
     }
     if (args.command === "init") {
       const initPath = args.initScope === "global" ? getGlobalConfigPath() : args.configPath;
-      const result = await initializeConfig(initPath, args.profile ?? "minimal");
+      const result = await initializeConfig(initPath, args.profile ?? "minimal", args.force ?? false);
       stdout.write(`${result}\n`);
       return 0;
     }
@@ -251,8 +251,18 @@ export async function main(
     stderr.write(`${formatNonInteractivePromptError(args.command)}\n`);
     return 1;
   } catch (error) {
+    if (isBrokenPipeError(error)) {
+      return 0;
+    }
     const message = redactText(error instanceof Error ? error.message : String(error));
-    stderr.write(`Error: ${message}\n`);
+    try {
+      stderr.write(`Error: ${message}\n`);
+    } catch (writeError) {
+      if (isBrokenPipeError(writeError)) {
+        return 0;
+      }
+      throw writeError;
+    }
     return 1;
   }
 }
@@ -1664,23 +1674,62 @@ async function confirmExtensionInstall(source: string, scope: "user" | "project"
   }
 }
 
-async function initializeConfig(configPath: string, profile: InitProfile): Promise<string> {
+async function initializeConfig(configPath: string, profile: InitProfile, force = false): Promise<string> {
   const resolvedPath = resolve(configPath);
-  try {
-    await access(resolvedPath);
-    throw new Error(`Config file already exists: ${resolvedPath}. Remove it first or choose a different --config path.`);
-  } catch (error) {
-    if (!isNodeMissingFileError(error)) {
-      throw error;
-    }
-  }
-
   const config = createInitConfig(profile);
   resolveAgentConfig(config);
-  await writeFile(resolvedPath, renderInitConfig(profile), "utf8");
-  return `Created ${resolvedPath} using the ${profile} profile.`;
+
+  if (!force) {
+    try {
+      await access(resolvedPath);
+      throw new Error(`Config file already exists: ${resolvedPath}. Remove it first or choose a different --config path.`);
+    } catch (error) {
+      if (!isNodeMissingFileError(error)) {
+        throw error;
+      }
+    }
+
+    await writeFile(resolvedPath, renderInitConfig(profile), "utf8");
+    return `Created ${resolvedPath} using the ${profile} profile.`;
+  }
+
+  const backupPath = await backupExistingConfigFile(resolvedPath);
+  try {
+    await writeFile(resolvedPath, renderInitConfig(profile), "utf8");
+  } catch (error) {
+    if (backupPath !== undefined) {
+      await rm(resolvedPath, { force: true }).catch(() => undefined);
+      await rename(backupPath, resolvedPath).catch(() => undefined);
+    }
+    throw error;
+  }
+
+  return `${backupPath ? "Updated" : "Created"} ${resolvedPath} using the ${profile} profile.${backupPath ? ` Backup saved to ${backupPath}.` : ""}`;
 }
 
 function isNodeMissingFileError(value: unknown): value is NodeJS.ErrnoException {
   return value instanceof Error && "code" in value && value.code === "ENOENT";
+}
+
+async function backupExistingConfigFile(resolvedPath: string): Promise<string | undefined> {
+  try {
+    const existing = await stat(resolvedPath);
+    if (!existing.isFile()) {
+      throw new Error(`Config path already exists but is not a file: ${resolvedPath}`);
+    }
+  } catch (error) {
+    if (isNodeMissingFileError(error)) {
+      return undefined;
+    }
+    throw error;
+  }
+
+  const backupPath = `${resolvedPath}.bak-${process.pid}-${Date.now()}`;
+  await rm(backupPath, { force: true }).catch(() => undefined);
+  await rename(resolvedPath, backupPath);
+  return backupPath;
+}
+
+function isBrokenPipeError(value: unknown): value is NodeJS.ErrnoException {
+  return value instanceof Error && "code" in value && value.code === "EPIPE";
 }

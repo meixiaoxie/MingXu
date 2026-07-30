@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -148,6 +148,7 @@ describe("mingxu CLI", () => {
     await expect(main(["--help"], { stdout, stderr, version: "0.1.0" })).resolves.toBe(0);
     expect(stdout.write).toHaveBeenCalledWith(expect.stringContaining("Usage: mingxu"));
     expect(stdout.write).toHaveBeenCalledWith(expect.stringContaining("--model <name>"));
+    expect(stdout.write).toHaveBeenCalledWith(expect.stringContaining("--force"));
     expect(stderr.write).not.toHaveBeenCalled();
 
     stdout.write.mockClear();
@@ -701,6 +702,78 @@ describe("mingxu CLI", () => {
       const stderr = { write: vi.fn() };
       await expect(main(["init", "--config", configPath], { stdout, stderr })).resolves.toBe(1);
       expect(stderr.write).toHaveBeenCalledWith(expect.stringContaining("Config file already exists"));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("init --force backs up an existing config and preserves sessions", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mingxu-cli-init-force-"));
+    const configPath = join(root, "mingxu.config.json");
+    const sessionDir = join(root, ".mingxu", "sessions");
+    const sessionPath = join(sessionDir, "session-1.jsonl");
+    await mkdir(sessionDir, { recursive: true });
+    await writeFile(configPath, JSON.stringify({ existing: true }, null, 2), "utf8");
+    await writeFile(sessionPath, "{\"sessionId\":\"session-1\"}\n", "utf8");
+
+    try {
+      const stdout = { write: vi.fn() };
+      const stderr = { write: vi.fn() };
+      await expect(main(["init", "--config", configPath, "--profile", "secure-local", "--force"], { stdout, stderr })).resolves.toBe(0);
+
+      const created = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
+      expect(created.session).toMatchObject({ enabled: true, save: true });
+      expect(created.audit).toMatchObject({ enabled: true });
+
+      const files = await readdir(root);
+      const backupName = files.find((name) => name.startsWith("mingxu.config.json.bak-"));
+      expect(backupName).toBeDefined();
+      const backup = JSON.parse(await readFile(join(root, backupName!), "utf8")) as Record<string, unknown>;
+      expect(backup).toEqual({ existing: true });
+
+      const sessionFiles = await readdir(sessionDir);
+      expect(sessionFiles).toContain("session-1.jsonl");
+      expect(stdout.write).toHaveBeenCalledWith(expect.stringContaining("Backup saved to"));
+      expect(stderr.write).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("treats stdout EPIPE as a clean exit", async () => {
+    const stdout = {
+      write: vi.fn(() => {
+        const error = new Error("broken pipe") as NodeJS.ErrnoException;
+        error.code = "EPIPE";
+        throw error;
+      }),
+    };
+    const stderr = { write: vi.fn() };
+
+    await expect(main(["--help"], { stdout, stderr, version: "0.1.0" })).resolves.toBe(0);
+    expect(stderr.write).not.toHaveBeenCalled();
+  });
+
+  it("treats stderr EPIPE as a clean exit", async () => {
+    const { root, configPath } = await writeConfigFile({
+      defaultModel: "primary",
+      models: {
+        primary: { provider: "anthropic", model: "claude-sonnet-5", apiKey: "test-key" },
+      },
+    });
+
+    try {
+      const stdout = { write: vi.fn(), isTTY: false };
+      const stderr = {
+        write: vi.fn(() => {
+          const error = new Error("broken pipe") as NodeJS.ErrnoException;
+          error.code = "EPIPE";
+          throw error;
+        }),
+      };
+      const stdin = createEmptyPipedStdin();
+
+      await expect(main(["--config", configPath], { stdout, stderr, stdin })).resolves.toBe(0);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

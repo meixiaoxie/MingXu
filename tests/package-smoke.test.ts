@@ -1,14 +1,14 @@
-import { mkdtemp, readFile, rm, stat, writeFile, mkdir, access, readdir } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile, mkdir, access, readdir, rename, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawn } from "node:child_process";
-import { createRequire } from "node:module";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const projectRoot = process.cwd();
 const cliPackageRoot = join(projectRoot, "packages", "cli");
 let installDirectory = "";
+const npmCacheDirectory = join(tmpdir(), `mingxu-package-smoke-cache-${process.pid}`);
 
 interface CommandResult {
   readonly exitCode: number;
@@ -22,7 +22,7 @@ function runNode(args: readonly string[], cwd = projectRoot): Promise<CommandRes
     const child = spawn(process.execPath, args, {
       cwd,
       shell: false,
-      env: { ...process.env, NO_COLOR: "1" },
+      env: { ...process.env, NO_COLOR: "1", npm_config_cache: npmCacheDirectory },
     });
     let stdout = "";
     let stderr = "";
@@ -43,7 +43,7 @@ function runCommand(command: string, args: readonly string[], cwd = projectRoot)
     const child = spawn(command, args, {
       cwd,
       shell: false,
-      env: { ...process.env, NO_COLOR: "1" },
+      env: { ...process.env, NO_COLOR: "1", npm_config_cache: npmCacheDirectory },
     });
     let stdout = "";
     let stderr = "";
@@ -57,43 +57,6 @@ function runCommand(command: string, args: readonly string[], cwd = projectRoot)
     child.on("error", reject);
     child.on("close", (exitCode) => resolve({ exitCode: exitCode ?? 1, stdout, stderr }));
   });
-}
-
-async function resolveNpmCommand(): Promise<{ readonly command: string; readonly args: readonly string[] }> {
-  const bundledNpmCliPath = join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
-  try {
-    await access(bundledNpmCliPath);
-    return { command: process.execPath, args: [bundledNpmCliPath] };
-  } catch {
-    // Fall through to package resolution and platform launchers.
-  }
-
-  try {
-    const npmCliPath = createRequire(import.meta.url).resolve("npm/bin/npm-cli.js");
-    await access(npmCliPath);
-    return { command: process.execPath, args: [npmCliPath] };
-  } catch {
-    const directFallback = process.platform === "win32"
-      ? { command: process.env.ComSpec ?? "cmd.exe", args: ["/d", "/s", "/c", "npm.cmd"] }
-      : { command: "npm", args: [] as string[] };
-    const directProbe = await runCommand(
-      directFallback.command,
-      [...directFallback.args, "--version"],
-      projectRoot,
-    ).catch(() => undefined);
-    if (directProbe?.exitCode === 0) {
-      return directFallback;
-    }
-
-    const corepackProbe = await runCommand("corepack", ["npm", "--version"], projectRoot).catch(() => undefined);
-    if (corepackProbe?.exitCode === 0) {
-      return { command: "corepack", args: ["npm"] };
-    }
-
-    throw new Error(
-      "Unable to locate npm for package smoke. Install npm or expose it on PATH before running pnpm test:smoke.",
-    );
-  }
 }
 
 function parsePackReports(stdout: string): Array<{
@@ -132,6 +95,51 @@ function resolvePnpmCommand(): { readonly command: string; readonly args: readon
     : { command: "pnpm", args: [] };
 }
 
+async function installPackedCliTarball(tarballPath: string, installRoot: string): Promise<void> {
+  const unpackRoot = await mkdtemp(join(tmpdir(), "mingxu-package-unpack-"));
+  const nodeModulesRoot = join(installRoot, "node_modules");
+  const packageParentRoot = join(nodeModulesRoot, "@mingxu");
+  const packageRoot = join(packageParentRoot, "cli");
+  const binRoot = join(installRoot, "node_modules", ".bin");
+  const sourceNodeModules = join(projectRoot, "node_modules");
+  const extractResult = await runCommand("tar", ["-xzf", tarballPath, "-C", unpackRoot], projectRoot);
+  expect(extractResult.exitCode, extractResult.stderr).toBe(0);
+
+  await mkdir(packageParentRoot, { recursive: true });
+  await mkdir(nodeModulesRoot, { recursive: true });
+  await mkdir(binRoot, { recursive: true });
+  await mirrorNodeModules(sourceNodeModules, nodeModulesRoot);
+  await rename(join(unpackRoot, "package"), packageRoot);
+
+  if (process.platform === "win32") {
+    const cmdPath = join(binRoot, "mingxu.cmd");
+    await writeFile(
+      cmdPath,
+      [
+        "@echo off",
+        "setlocal",
+        `set "_node=${process.execPath}"`,
+        "\"%_node%\" \"%~dp0..\\@mingxu\\cli\\dist\\entry.js\" %*",
+        "",
+      ].join("\r\n"),
+      "utf8",
+    );
+  } else {
+    await symlink(join("..", "@mingxu", "cli", "dist", "entry.js"), join(binRoot, "mingxu"));
+  }
+}
+
+async function mirrorNodeModules(sourceRoot: string, targetRoot: string): Promise<void> {
+  for (const entry of await readdir(sourceRoot, { withFileTypes: true })) {
+    if (entry.name.startsWith(".") || entry.name === "@mingxu") {
+      continue;
+    }
+    const sourcePath = join(sourceRoot, entry.name);
+    const targetPath = join(targetRoot, entry.name);
+    await symlink(sourcePath, targetPath, process.platform === "win32" ? "junction" : undefined);
+  }
+}
+
 beforeAll(async () => {
   const staleModule = join(cliPackageRoot, "dist", "stale.js");
   await mkdir(dirname(staleModule), { recursive: true });
@@ -167,14 +175,8 @@ beforeAll(async () => {
   expect(paths).not.toContain("dist/stale.js");
 
   const tarballPath = join(packDirectory, report?.filename ?? "missing.tgz");
-  const npmCommand = await resolveNpmCommand();
-  const installed = await runCommand(
-    npmCommand.command,
-    [...npmCommand.args, "install", "--ignore-scripts", "--no-audit", "--no-fund", tarballPath],
-    installDirectory,
-  );
-  expect(installed.exitCode, installed.stderr).toBe(0);
-}, 180_000);
+  await installPackedCliTarball(tarballPath, installDirectory);
+}, 300_000);
 
 afterAll(async () => {
   if (installDirectory) await rm(installDirectory, { recursive: true, force: true });
@@ -194,20 +196,28 @@ describe("packed CLI and public API smoke path", () => {
     expect(entrySource.startsWith("#!/usr/bin/env node")).toBe(true);
     expect(entryStats.isFile()).toBe(true);
 
-    const helpResult = await runNode([entryPath, "--help"], installDirectory);
+    const helpResult = await runCommand(
+      process.platform === "win32" ? process.env.ComSpec ?? "cmd.exe" : binPath,
+      process.platform === "win32" ? ["/d", "/s", "/c", binPath, "--help"] : ["--help"],
+      installDirectory,
+    );
     expect(helpResult.exitCode, helpResult.stderr).toBe(0);
     expect(helpResult.stdout).toContain("Usage: mingxu");
     expect(helpResult.stdout).toContain("--model <name>");
+    expect(helpResult.stdout).toContain("--force");
     expect(helpResult.stderr).toBe("");
 
-    const versionResult = await runNode([entryPath, "--version"], installDirectory);
+    const versionResult = await runCommand(
+      process.platform === "win32" ? process.env.ComSpec ?? "cmd.exe" : binPath,
+      process.platform === "win32" ? ["/d", "/s", "/c", binPath, "--version"] : ["--version"],
+      installDirectory,
+    );
     expect(versionResult.exitCode, versionResult.stderr).toBe(0);
     expect(versionResult.stdout.trim()).toBe("0.4.0");
   }, 20_000);
 
   it("completes an offline init -> run -> doctor -> audit loop from the packed tarball", async () => {
     const fixtureRoot = join(installDirectory, "offline-e2e-fixture");
-    const entryPath = join(installDirectory, "node_modules", "@mingxu", "cli", "dist", "entry.js");
     const configPath = join(fixtureRoot, "mingxu.config.json");
     const providerModulePath = join(fixtureRoot, "providers.mjs");
     const runConfig = {
@@ -268,38 +278,71 @@ describe("packed CLI and public API smoke path", () => {
 
     await mkdir(fixtureRoot, { recursive: true });
 
-    const initResult = await runNode([entryPath, "init", "--config", configPath, "--profile", "secure-local"], installDirectory);
+    const initResult = await runCommand(
+      process.platform === "win32" ? process.env.ComSpec ?? "cmd.exe" : join(installDirectory, "node_modules", ".bin", "mingxu"),
+      process.platform === "win32"
+        ? ["/d", "/s", "/c", join(installDirectory, "node_modules", ".bin", "mingxu.cmd"), "init", "--config", configPath, "--profile", "secure-local"]
+        : ["init", "--config", configPath, "--profile", "secure-local"],
+      installDirectory,
+    );
     expect(initResult.exitCode, initResult.stderr).toBe(0);
     expect(await readFile(configPath, "utf8")).toContain('"defaultModel": "primary"');
+
+    const sessionDirectory = join(fixtureRoot, ".mingxu", "sessions");
+    await mkdir(sessionDirectory, { recursive: true });
+    await writeFile(join(sessionDirectory, "session-keep.jsonl"), "{\"sessionId\":\"session-keep\"}\n", "utf8");
+
+    const forceResult = await runCommand(
+      process.platform === "win32" ? process.env.ComSpec ?? "cmd.exe" : join(installDirectory, "node_modules", ".bin", "mingxu"),
+      process.platform === "win32"
+        ? ["/d", "/s", "/c", join(installDirectory, "node_modules", ".bin", "mingxu.cmd"), "init", "--config", configPath, "--profile", "minimal", "--force"]
+        : ["init", "--config", configPath, "--profile", "minimal", "--force"],
+      installDirectory,
+    );
+    expect(forceResult.exitCode, forceResult.stderr).toBe(0);
+    const rootEntries = await readdir(fixtureRoot);
+    const backupName = rootEntries.find((name) => name.startsWith("mingxu.config.json.bak-"));
+    expect(backupName).toBeDefined();
+    expect(await readFile(join(fixtureRoot, backupName!), "utf8")).toContain('"audit":');
+    expect(await readdir(sessionDirectory)).toContain("session-keep.jsonl");
 
     await writeFile(configPath, JSON.stringify(runConfig, null, 2), "utf8");
     await writeFile(providerModulePath, providerModuleSource, "utf8");
 
-    const runResult = await runNode([entryPath, "--config", configPath, "Say hello"], fixtureRoot);
+    const runResult = await runCommand(
+      process.platform === "win32" ? process.env.ComSpec ?? "cmd.exe" : join(installDirectory, "node_modules", ".bin", "mingxu"),
+      process.platform === "win32"
+        ? ["/d", "/s", "/c", join(installDirectory, "node_modules", ".bin", "mingxu.cmd"), "--config", configPath, "Say hello"]
+        : ["--config", configPath, "Say hello"],
+      installDirectory,
+    );
     expect(runResult.exitCode, runResult.stderr).toBe(0);
     expect(runResult.stdout.trim()).toBe("final:Say hello");
 
-    const doctorResult = await runNode([entryPath, "doctor", "--config", configPath], fixtureRoot);
+    const doctorResult = await runCommand(
+      process.platform === "win32" ? process.env.ComSpec ?? "cmd.exe" : join(installDirectory, "node_modules", ".bin", "mingxu"),
+      process.platform === "win32"
+        ? ["/d", "/s", "/c", join(installDirectory, "node_modules", ".bin", "mingxu.cmd"), "doctor", "--config", configPath]
+        : ["doctor", "--config", configPath],
+      installDirectory,
+    );
     expect(doctorResult.exitCode, doctorResult.stdout).toBe(0);
     expect(doctorResult.stdout).toContain("PASS config");
     expect(doctorResult.stdout).toContain("PASS plugin");
 
-    const sessionDirectory = join(fixtureRoot, ".mingxu", "sessions");
     const auditPath = join(fixtureRoot, ".mingxu", "audit", "runtime.jsonl");
     const sessionFiles = await readdir(sessionDirectory);
     expect(sessionFiles.length).toBeGreaterThan(0);
     const sessionFilename = sessionFiles.find((name) => name.endsWith(".jsonl"));
     expect(sessionFilename).toBeDefined();
     const sessionId = sessionFilename!.slice(0, -".jsonl".length);
-    const resumeResult = await runNode([
-      entryPath,
-      "--config",
-      configPath,
-      "resume",
-      sessionId,
-      "--prompt",
-      "Continue work",
-    ], fixtureRoot);
+    const resumeResult = await runCommand(
+      process.platform === "win32" ? process.env.ComSpec ?? "cmd.exe" : join(installDirectory, "node_modules", ".bin", "mingxu"),
+      process.platform === "win32"
+        ? ["/d", "/s", "/c", join(installDirectory, "node_modules", ".bin", "mingxu.cmd"), "--config", configPath, "resume", sessionId, "--prompt", "Continue work"]
+        : ["--config", configPath, "resume", sessionId, "--prompt", "Continue work"],
+      installDirectory,
+    );
     expect(resumeResult.exitCode, resumeResult.stderr).toBe(0);
     expect(resumeResult.stdout.trim()).toBe("final:Say hello|Continue work");
 

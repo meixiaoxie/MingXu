@@ -16,6 +16,7 @@ const packDestination = packDestinationIndex >= 0 ? args[packDestinationIndex + 
 
 const stagingRoot = await mkdtemp(join(tmpdir(), "mingxu-cli-pack-"));
 const stagingPackageRoot = join(stagingRoot, "package");
+const npmCacheRoot = join(stagingRoot, "npm-cache");
 await mkdir(stagingPackageRoot, { recursive: true });
 await cp(join(packageRoot, "dist"), join(stagingPackageRoot, "dist"), { recursive: true });
 
@@ -47,7 +48,7 @@ const child = spawn(process.execPath, [
 ], {
   cwd: stagingPackageRoot,
   stdio: ["ignore", "pipe", "pipe"],
-  env: process.env,
+  env: { ...process.env, npm_config_cache: npmCacheRoot },
 });
 
 child.stdout.on("data", (chunk) => process.stdout.write(chunk));
