@@ -60,6 +60,7 @@ export interface CliDependencies {
   stdout?: Pick<NodeJS.WriteStream, "write">;
   stderr?: Pick<NodeJS.WriteStream, "write">;
   stdin?: NodeJS.ReadStream;
+  terminalFactory?: (stdin: NodeJS.ReadStream, stdout: NodeJS.WriteStream) => ProcessTerminal;
   version?: string;
   debugProvider?: boolean;
 }
@@ -90,6 +91,8 @@ export async function main(
   const stdout = dependencies.stdout ?? process.stdout;
   const stderr = dependencies.stderr ?? process.stderr;
   const stdin = dependencies.stdin ?? process.stdin;
+  const createTerminal = dependencies.terminalFactory
+    ?? ((terminalStdin: NodeJS.ReadStream, terminalStdout: NodeJS.WriteStream) => new ProcessTerminal(terminalStdin, terminalStdout));
 
   try {
     const args = parseArgs(argv);
@@ -215,6 +218,7 @@ export async function main(
         stderr,
         projectTrusted: configDiscovery.projectTrusted,
         configSources: configDiscovery.sources,
+        createTerminal,
         ...(args.model !== undefined ? { modelKey: args.model } : {}),
         ...(args.prompt !== undefined ? { initialPrompt: args.prompt } : {}),
         ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
@@ -325,6 +329,7 @@ async function runChatLoop(options: {
   stderr: Pick<NodeJS.WriteStream, "write">;
   projectTrusted: boolean;
   configSources: readonly { kind: "explicit" | "global" | "project"; path: string }[];
+  createTerminal: (stdin: NodeJS.ReadStream, stdout: NodeJS.WriteStream) => ProcessTerminal;
   modelKey?: string;
   initialPrompt?: string;
   resumeSessionId?: string;
@@ -354,7 +359,7 @@ async function runChatLoop(options: {
     });
     app = new CliTuiApp({
       runtime,
-      terminal: new ProcessTerminal(process.stdin, process.stdout),
+      terminal: options.createTerminal(process.stdin, process.stdout),
       session,
       ...(currentModelKey !== undefined ? { modelKey: currentModelKey } : {}),
       ...(currentSessionId !== undefined ? { sessionId: currentSessionId } : {}),
@@ -1087,7 +1092,7 @@ function resolveIndexedChoice(choice: string, values: readonly string[]): string
   return undefined;
 }
 
-async function runChatPrompt(options: {
+export async function runChatPrompt(options: {
   readonly session: AgentSession;
   readonly prompt: string;
   readonly stdout: Pick<NodeJS.WriteStream, "write">;
@@ -1126,7 +1131,9 @@ async function runChatPrompt(options: {
       if (messageHadText) {
         options.stdout.write("\n");
       }
-      options.stderr.write(`Error: ${redactText(event.error)}\n`);
+      const error = event.error as unknown;
+      const message = redactText(error instanceof Error ? error.message : String(error));
+      options.stderr.write(`Error: ${message}\n`);
     }
   });
 

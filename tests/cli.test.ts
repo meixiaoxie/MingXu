@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { main } from "../src/cli/main.js";
 import { MINGXU_IDENTITY_PROMPT } from "../src/cli/identity.js";
 import { JsonlSessionStore } from "../src/session/jsonl-session-store.js";
+import type { ProcessTerminal } from "@mingxu/tui";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -102,6 +103,43 @@ function createEmptyPipedStdin(): NodeJS.ReadStream {
   } as unknown as NodeJS.ReadStream;
 }
 
+function createInteractiveTerminal() {
+  const keyListeners: Array<(input: { sequence: string; name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean }) => void> = [];
+  let resolveReady: (() => void) | undefined;
+  const ready = new Promise<void>((resolve) => {
+    resolveReady = resolve;
+  });
+  return {
+    size: { columns: 80, rows: 24 },
+    enterRawMode: vi.fn(),
+    hideCursor: vi.fn(),
+    showCursor: vi.fn(),
+    restore: vi.fn(),
+    render: vi.fn(),
+    onKeypress(listener: (input: { sequence: string; name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean }) => void) {
+      keyListeners.push(listener);
+      resolveReady?.();
+      resolveReady = undefined;
+      return () => {
+        const index = keyListeners.indexOf(listener);
+        if (index >= 0) keyListeners.splice(index, 1);
+      };
+    },
+    onResize() {
+      return () => undefined;
+    },
+    emit(input: { sequence: string; name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean }) {
+      for (const listener of keyListeners) {
+        listener(input);
+      }
+    },
+    ready,
+  } as unknown as ProcessTerminal & {
+    emit(input: { sequence: string; name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean }): void;
+    ready: Promise<void>;
+  };
+}
+
 describe("mingxu CLI", () => {
   it("prints help and version information", async () => {
     const stdout = { write: vi.fn() };
@@ -150,6 +188,88 @@ describe("mingxu CLI", () => {
       expect(stdout.write).toHaveBeenCalledWith("mocked result\n");
       expect(stderr.write).not.toHaveBeenCalled();
     } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("TTY chat mode enters raw terminal mode and exits cleanly", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mingxu-cli-tty-"));
+    const configPath = join(root, "mingxu.config.json");
+    const providerPath = join(root, "providers.mjs");
+
+    await writeFile(providerPath, `
+      const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+      export function register(registry) {
+        registry.register({
+          provider: "local-test",
+          capabilities: {
+            supportsTools: true,
+            supportsStreaming: false,
+            supportsImages: false,
+            supportsStructuredOutput: false,
+            supportsRefusal: false,
+            supportsFallback: false,
+            supportsEffort: false,
+            supportsPromptCaching: false,
+            supportsMidConversationSystem: false,
+            maxContext: 1000,
+            maxOutput: 100,
+          },
+          create() {
+            return {
+              provider: "local-test",
+              capabilities: this.capabilities,
+              async generate() {
+                globalThis.__mingxuTtyPromptStarted?.();
+                await delay(25);
+                return { text: "TTY reply", toolCalls: [] };
+              },
+            };
+          },
+        });
+      }
+    `, "utf8");
+    await writeFile(configPath, JSON.stringify({
+      defaultModel: "local",
+      models: {
+        local: { provider: "local-test", model: "local-model" },
+      },
+      customProviders: {
+        module: "./providers.mjs",
+      },
+    }), "utf8");
+
+    const terminal = createInteractiveTerminal();
+    const stdout = { write: vi.fn(), isTTY: true };
+    const stderr = { write: vi.fn(), isTTY: true };
+    const stdin = { isTTY: true } as unknown as NodeJS.ReadStream;
+
+    try {
+      const promptStarted = new Promise<void>((resolve) => {
+        (globalThis as { __mingxuTtyPromptStarted?: () => void }).__mingxuTtyPromptStarted = resolve;
+      });
+      const exitPromise = main(["--config", configPath, "chat", "Hello TTY"], {
+        stdout,
+        stderr,
+        stdin,
+        terminalFactory: () => terminal,
+      });
+
+      await terminal.ready;
+      await promptStarted;
+      terminal.emit({ sequence: "", name: "d", ctrl: true });
+      terminal.emit({ sequence: "", name: "d", ctrl: true });
+
+      await expect(exitPromise).resolves.toBe(0);
+      expect(terminal.enterRawMode).toHaveBeenCalledOnce();
+      expect(terminal.hideCursor).toHaveBeenCalledOnce();
+      expect(terminal.showCursor).toHaveBeenCalledOnce();
+      expect(terminal.restore).toHaveBeenCalledOnce();
+      expect(stdout.write).toHaveBeenCalledWith(expect.stringContaining("mingxu chat. Type /help for commands."));
+      expect(stderr.write).not.toHaveBeenCalled();
+    } finally {
+      delete (globalThis as { __mingxuTtyPromptStarted?: () => void }).__mingxuTtyPromptStarted;
       await rm(root, { recursive: true, force: true });
     }
   });
