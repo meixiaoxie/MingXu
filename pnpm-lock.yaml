@@ -51,6 +51,8 @@ importers:
 
   packages/tui: {}
 
+  packages/web-search: {}
+
 packages:
 
   '@esbuild/aix-ppc64@0.28.1':
