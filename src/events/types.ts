@@ -4,6 +4,16 @@ export type { AgentMessage, AgentState, ToolCall, ToolResult } from "../core/mes
 
 export type RuntimeEventSource = "core" | "model" | "tool" | "plugin" | "memory" | "audit" | "cli";
 
+export interface AgentEventMetadata {
+  readonly eventId: string;
+  readonly sequence: number;
+  readonly source: RuntimeEventSource;
+  readonly sessionId?: string;
+  readonly runId?: string;
+  readonly messageId?: string;
+  readonly toolCallId?: string;
+}
+
 export interface RuntimeEventContext {
   runId: string;
   sequence: number;
@@ -117,7 +127,7 @@ export interface AgentLifecycleEventMap {
 export type AgentLifecycleEventType = keyof AgentLifecycleEventMap;
 
 export type AgentLifecycleEvent = {
-  [K in AgentLifecycleEventType]: { type: K } & AgentLifecycleEventMap[K];
+  [K in AgentLifecycleEventType]: { type: K } & AgentLifecycleEventMap[K] & Partial<AgentEventMetadata>;
 }[AgentLifecycleEventType];
 
 export type AgentEvent = AgentLifecycleEvent;

@@ -45,4 +45,42 @@ describe("ConversationViewModel", () => {
     expect(rendered).not.toContain("inputTokens:");
     expect(rendered).not.toContain("\u001b[");
   });
+
+  it("keeps completed blocks stable when duplicate or stale updates arrive", () => {
+    const view = new ConversationViewModel();
+    view.startAssistantMessage("assistant-1");
+    view.updateAssistantMessage("assistant-1", "A longer answer");
+    view.finishAssistantMessage("assistant-1", "A longer answer");
+    const block = view.getBlock("assistant-1");
+    const revision = block?.revision;
+
+    view.startAssistantMessage("assistant-1");
+    view.updateAssistantMessage("assistant-1", "A");
+    view.finishAssistantMessage("assistant-1", "A");
+
+    expect(view.getBlock("assistant-1")).toBe(block);
+    expect(block?.state).toBe("complete");
+    expect(block?.summary).toBe("A longer answer");
+    expect(block?.revision).toBe(revision);
+  });
+
+  it("does not reopen a completed tool block for a late update", () => {
+    const view = new ConversationViewModel();
+    const toolCall = { id: "tool-1", name: "read-file", input: { path: "README.md" } };
+    view.startToolMessage("tool-1", toolCall);
+    view.finishToolMessage("tool-1", toolCall, {
+      toolCallId: "tool-1",
+      name: "read-file",
+      output: "done",
+      isError: false,
+    });
+    const block = view.getBlock("tool-1");
+    const revision = block?.revision;
+
+    view.updateToolMessage("tool-1", "late preview");
+
+    expect(view.getBlock("tool-1")).toBe(block);
+    expect(block?.state).toBe("complete");
+    expect(block?.revision).toBe(revision);
+  });
 });

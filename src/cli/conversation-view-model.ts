@@ -40,6 +40,14 @@ export class ConversationViewModel {
     this.#blockIndex.clear();
   }
 
+  hasBlock(id: string): boolean {
+    return this.#blockIndex.has(id);
+  }
+
+  getBlock(id: string): ConversationBlock | undefined {
+    return this.#blockIndex.get(id);
+  }
+
   pushUserMessage(id: string, text: string): ConversationBlock {
     return this.#upsertBlock(id, "user", {
       title: "you",
@@ -51,6 +59,10 @@ export class ConversationViewModel {
   }
 
   startAssistantMessage(id: string, title = "MingXu"): ConversationBlock {
+    const existing = this.#blockIndex.get(id);
+    if (existing?.kind === "assistant" && (existing.state === "complete" || existing.state === "error")) {
+      return existing;
+    }
     return this.#upsertBlock(id, "assistant", {
       title,
       state: "streaming",
@@ -63,6 +75,9 @@ export class ConversationViewModel {
   updateAssistantMessage(id: string, content: string): ConversationBlock {
     const sanitized = sanitizeTerminalText(content);
     const existing = this.#blockIndex.get(id);
+    if (existing?.kind === "assistant" && (existing.state === "complete" || existing.state === "error")) {
+      return existing;
+    }
     if (existing && existing.kind === "assistant" && visibleWidth(sanitized) < visibleWidth(existing.summary)) {
       return existing;
     }
@@ -75,18 +90,27 @@ export class ConversationViewModel {
     });
   }
 
-  finishAssistantMessage(id: string, content: string, title = "MingXu"): ConversationBlock {
+  finishAssistantMessage(id: string, content: string, title = "MingXu"): ConversationBlock | undefined {
+    const existing = this.#blockIndex.get(id);
+    if (!existing || existing.kind !== "assistant") {
+      return undefined;
+    }
     const sanitized = sanitizeTerminalText(content);
+    const summary = visibleWidth(sanitized) < visibleWidth(existing.summary) ? existing.summary : sanitized;
     return this.#upsertBlock(id, "assistant", {
       title,
       state: "complete",
-      summary: sanitized,
-      lines: this.#messageLines(sanitized),
+      summary,
+      lines: this.#messageLines(summary),
       live: false,
     });
   }
 
   startToolMessage(id: string, toolCall: ToolCall, source?: string): ConversationBlock {
+    const existing = this.#blockIndex.get(id);
+    if (existing?.kind === "tool" && (existing.state === "complete" || existing.state === "error")) {
+      return existing;
+    }
     const input = this.#describeToolInput(toolCall.input);
     return this.#upsertBlock(id, "tool", {
       title: toolCall.name,
@@ -103,6 +127,9 @@ export class ConversationViewModel {
     if (!block || block.kind !== "tool") {
       return undefined;
     }
+    if (block.state === "complete" || block.state === "error") {
+      return block;
+    }
     return this.#upsertBlock(id, "tool", {
       title: block.title,
       state: "streaming",
@@ -113,7 +140,11 @@ export class ConversationViewModel {
     });
   }
 
-  finishToolMessage(id: string, toolCall: ToolCall, result: ToolResult, source?: string): ConversationBlock {
+  finishToolMessage(id: string, toolCall: ToolCall, result: ToolResult, source?: string): ConversationBlock | undefined {
+    const existing = this.#blockIndex.get(id);
+    if (!existing || existing.kind !== "tool") {
+      return undefined;
+    }
     const body = [
       `input: ${this.#describeToolInput(toolCall.input)}`,
       `output: ${this.#describeValue(result.output)}`,
@@ -209,6 +240,14 @@ export class ConversationViewModel {
   ): ConversationBlock {
     const existing = this.#blockIndex.get(id);
     if (existing) {
+      if (existing.kind !== kind) {
+        Object.assign(existing, patch);
+        existing.revision += 1;
+        return existing;
+      }
+      if (sameConversationPatch(existing, patch)) {
+        return existing;
+      }
       Object.assign(existing, patch);
       existing.revision += 1;
       return existing;
@@ -350,4 +389,23 @@ export class ConversationViewModel {
         return "accent";
     }
   }
+}
+
+function sameConversationPatch(
+  block: ConversationBlock,
+  patch: Omit<ConversationBlock, "id" | "kind" | "revision">,
+): boolean {
+  return block.title === patch.title
+    && block.state === patch.state
+    && block.summary === patch.summary
+    && block.live === patch.live
+    && block.source === patch.source
+    && sameLines(block.lines, patch.lines);
+}
+
+function sameLines(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  return left.every((line, index) => line === right[index]);
 }

@@ -4,22 +4,13 @@ import { AgentSession } from "../core/agent-session.js";
 import type { AgentEvent } from "../events/types.js";
 import type { ApprovalPrompt, ApprovalResponse, ApprovalResponseScope } from "../approval/types.js";
 import { ProcessTerminal, Box, Editor, KeyValue, Markdown, SelectList, Table, Text, Tree, TuiHost, type SelectListItem, type TreeNode, type KeyInput, type Component, type OverlayFrame } from "@mingxu/tui";
-import { ConversationViewModel } from "./conversation-view-model.js";
 import { truncateToWidth, visibleWidth, wrapText } from "@mingxu/tui";
 import type { CliRuntimeContext, CliRuntimeSnapshot, CliSessionRequest } from "./runtime-types.js";
 import { formatChatHelp, suggestChatCommands } from "./chat-commands.js";
 import { redactText, redactValue } from "../redaction/redactor.js";
 import { resolveTranscriptTheme } from "./transcript-theme.js";
 import { OverlayHost } from "@mingxu/tui";
-
-interface ConversationBlock {
-  readonly id: string;
-  readonly kind: "user" | "assistant" | "tool" | "status" | "error";
-  title: string;
-  text?: string;
-  lines: string[];
-  live?: boolean;
-}
+import { CliRuntimeProjection } from "./runtime-projection.js";
 
 interface SelectPanelItem<T = string> {
   readonly id: string;
@@ -61,7 +52,7 @@ export class CliTuiApp {
   readonly #host: TuiHost;
   readonly #screen: CliTuiScreen;
   readonly #editor: Editor;
-  readonly #conversation = new ConversationViewModel();
+  readonly #conversation = new CliRuntimeProjection();
   readonly #transcriptTheme;
   readonly #overlays = new OverlayHost();
   #snapshot: CliRuntimeSnapshot | undefined;
@@ -78,9 +69,6 @@ export class CliTuiApp {
   #activePanel: ActivePanel = undefined;
   #approval: PendingApproval | undefined;
   #sessionSubscription: (() => void) | undefined;
-  #currentAssistantBlockId: string | undefined;
-  #currentToolBlocks = new Map<string, ConversationBlock>();
-  #lastStatus = "Idle";
   #composerNotice: string | undefined;
   #blockSeq = 0;
   #finishResolver: ((exitCode: number) => void) | undefined;
@@ -248,8 +236,6 @@ export class CliTuiApp {
       throw error;
     } finally {
       this.#running = false;
-      this.#currentAssistantBlockId = undefined;
-      this.#currentToolBlocks.clear();
       await this.#refreshSnapshot();
       this.#host.requestRender();
       this.#tryFinish();
@@ -776,75 +762,10 @@ export class CliTuiApp {
   }
 
   async #handleAgentEvent(event: AgentEvent): Promise<void> {
-    switch (event.type) {
-      case "agent_start":
-        this.#running = true;
-        this.#pushStatus("Run started");
-        this.#host.requestRender();
-        return;
-      case "turn_start":
-        return;
-      case "message_start": {
-        const messageId = event.message.id ?? this.#nextBlockId(event.message.role);
-        if (event.message.role === "assistant") {
-          this.#currentAssistantBlockId = messageId;
-          this.#conversation.startAssistantMessage(messageId, "MingXu");
-        } else if (event.message.role === "user") {
-          this.#conversation.pushUserMessage(messageId, event.message.content);
-        }
-        this.#host.requestRender();
-        return;
-      }
-      case "message_update": {
-        const delta = event.delta as { type?: string; text?: string } | undefined;
-        if (event.message.role === "assistant" && typeof event.message.content === "string") {
-          const assistantId = event.message.id ?? this.#currentAssistantBlockId;
-          if (assistantId) {
-            this.#currentAssistantBlockId = assistantId;
-            if (delta?.type === "text_delta" && typeof delta.text === "string") {
-              this.#conversation.updateAssistantMessage(assistantId, event.message.content);
-            } else {
-              this.#conversation.updateAssistantMessage(assistantId, event.message.content);
-            }
-          }
-        }
-        this.#host.requestRender();
-        return;
-      }
-      case "message_end": {
-        if (event.message.role === "assistant") {
-          const assistantId = event.message.id ?? this.#currentAssistantBlockId;
-          if (assistantId) {
-            this.#currentAssistantBlockId = assistantId;
-            this.#conversation.finishAssistantMessage(assistantId, event.message.content, "MingXu");
-          }
-        }
-        this.#host.requestRender();
-        return;
-      }
-      case "tool_execution_start": {
-        this.#conversation.startToolMessage(event.toolCall.id, event.toolCall);
-        this.#host.requestRender();
-        return;
-      }
-      case "tool_execution_update":
-        this.#conversation.updateToolMessage(event.toolCall.id, event.partialResult);
-        this.#host.requestRender();
-        return;
-      case "tool_execution_end":
-        this.#conversation.finishToolMessage(event.toolCall.id, event.toolCall, event.result);
-        this.#host.requestRender();
-        return;
-      case "turn_end":
-      case "agent_end":
-        this.#running = false;
-        this.#host.requestRender();
-        return;
-      case "error":
-        this.#running = false;
-        this.#conversation.addError(this.#nextBlockId("error"), "agent error", event.error);
-        this.#host.requestRender();
-        return;
+    const result = this.#conversation.applyAgentEvent(event);
+    this.#running = this.#conversation.state.running;
+    if (result.changed) {
+      this.#host.requestRender();
     }
   }
 
@@ -1163,7 +1084,7 @@ export class CliTuiApp {
   }
 
   #pushStatus(message: string): void {
-    this.#lastStatus = message;
+    this.#conversation.setLastStatus(message);
     this.#host.requestRender();
   }
 
@@ -1321,7 +1242,7 @@ export class CliTuiApp {
 
   #renderFooter(snapshot: CliRuntimeSnapshot | undefined, activeModel: string, width: number): string[] {
     const context = this.#currentSession.state.messages.length;
-    const status = this.#lastStatus;
+    const status = this.#conversation.state.lastStatus;
     const footer = truncateToWidth(`state: ${this.#running ? "streaming" : "idle"} | model: ${activeModel} | ctx: ${context} | ${status}`, width);
     return [footer];
   }

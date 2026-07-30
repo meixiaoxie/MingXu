@@ -11,7 +11,7 @@ import type {
   ModelProvider,
   ToolCall,
 } from "./types.js";
-import type { AgentEventListener, AgentEvent } from "../events/types.js";
+import type { AgentEventListener, AgentEvent, AgentEventMetadata } from "../events/types.js";
 import type { MemoryEntry, MemoryQuery, MemoryScope } from "../memory/memory-scope.js";
 import type { AgentHooks } from "../hooks/hook-types.js";
 
@@ -49,6 +49,8 @@ export class Agent {
   #lastInput: string | undefined;
   #lastStableMessages: AgentMessage[] = [];
   #sessionId: string | undefined;
+  #currentRunId: string | undefined;
+  #eventSequence = 0;
 
   constructor(options: AgentOptions) {
     this.#options = options;
@@ -75,11 +77,13 @@ export class Agent {
     this.#lastInput = userInput;
     this.#lastStableMessages = [...this.#state.messages];
     this.#abortController = new AbortController();
+    this.#currentRunId = createRuntimeId("run");
+    this.#eventSequence = 0;
 
     const memoryContext = await loadMemory(this.#options.memoryManager);
     await runSessionStartHook(this.#options.hooks, this.#state, this.#state.messages);
 
-    await emitAll(this.#listeners, { type: "agent_start", state: this.#state });
+    await this.#emitEvent({ type: "agent_start", state: this.#state });
 
     try {
       const streamFn =
@@ -100,7 +104,7 @@ export class Agent {
         this.#abortController.signal,
         async (event: AgentEvent) => {
           this.#state = reduceAgentState(this.#state, event);
-          await emitAll(this.#listeners, event);
+          await this.#emitEvent(event);
         },
       );
 
@@ -110,7 +114,7 @@ export class Agent {
       this.#sessionId = result.sessionId ?? this.#sessionId;
       this.#state.isStreaming = false;
 
-      await emitAll(this.#listeners, { type: "agent_end", state: this.#state });
+      await this.#emitEvent({ type: "agent_end", state: this.#state });
       await runSessionEndHook(this.#options.hooks, this.#state);
 
       const followUp = this.#followUpQueue.drainOne();
@@ -121,7 +125,7 @@ export class Agent {
       this.#state.isStreaming = false;
       this.#state.errorMessage =
         error instanceof Error ? error.message : String(error);
-      await emitAll(this.#listeners, {
+      await this.#emitEvent({
         type: "error",
         error: this.#state.errorMessage,
         state: this.#state,
@@ -136,6 +140,8 @@ export class Agent {
   async continue(): Promise<AgentLoopResult> {
     this.#lastInput = undefined;
     this.#abortController = new AbortController();
+    this.#currentRunId = createRuntimeId("run");
+    this.#eventSequence = 0;
 
     try {
       const streamFn =
@@ -150,7 +156,7 @@ export class Agent {
         this.#abortController.signal,
         async (event: AgentEvent) => {
           this.#state = reduceAgentState(this.#state, event);
-          await emitAll(this.#listeners, event);
+          await this.#emitEvent(event);
         },
         true,
       );
@@ -186,6 +192,26 @@ export class Agent {
     // 清除错误信息——retry 后是一个全新的开始
     delete this.#state.errorMessage;
     return this.prompt(this.#lastInput);
+  }
+  async #emitEvent(event: AgentEvent): Promise<void> {
+    await emitAll(this.#listeners, this.#decorateEvent(event));
+  }
+
+  #decorateEvent(event: AgentEvent): AgentEvent {
+    const metadata: AgentEventMetadata = {
+      eventId: createRuntimeId("event"),
+      sequence: ++this.#eventSequence,
+      source: "core",
+      ...(this.#sessionId !== undefined ? { sessionId: this.#sessionId } : {}),
+      ...(this.#currentRunId !== undefined ? { runId: this.#currentRunId } : {}),
+      ...(event.type === "message_start" || event.type === "message_update" || event.type === "message_end"
+        ? { messageId: event.message.id }
+        : {}),
+      ...(event.type === "tool_execution_start" || event.type === "tool_execution_update" || event.type === "tool_execution_end"
+        ? { toolCallId: event.toolCall.id }
+        : {}),
+    };
+    return { ...event, ...metadata };
   }
 }
 

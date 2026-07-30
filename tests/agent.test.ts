@@ -134,4 +134,25 @@ describe("Agent", () => {
 
     expect(result.content).toBe("continued");
   });
+  it("decorates lifecycle events with stable metadata", async () => {
+    const events: AgentEvent[] = [];
+    const model: ModelProvider = {
+      async generate() {
+        return { content: "done", toolCalls: [] };
+      },
+    };
+    const agent = new Agent({ model });
+
+    agent.subscribe((event: AgentEvent) => {
+      events.push(event);
+    });
+
+    await agent.prompt("hi");
+
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.every((event) => event.eventId && event.source === "core" && typeof event.sequence === "number")).toBe(true);
+    expect(events.map((event) => event.sequence)).toEqual(events.map((_, index) => index + 1));
+    expect(new Set(events.map((event) => event.runId)).size).toBe(1);
+    expect(events.some((event) => event.type === "message_start" && event.messageId)).toBe(true);
+  });
 });

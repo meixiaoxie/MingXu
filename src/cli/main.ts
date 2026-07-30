@@ -44,6 +44,7 @@ import { ExtensionManager } from "../extensions/extension-manager.js";
 import { MINGXU_IDENTITY_PROMPT } from "./identity.js";
 import { ChatInputController } from "./chat-input.js";
 import { findChatCommand, formatChatHelp, suggestChatCommands } from "./chat-commands.js";
+import { CliRuntimeProjection } from "./runtime-projection.js";
 import type { CliRuntimeContext, CliRuntimeSnapshot, CliSessionRequest } from "./runtime-types.js";
 import { CliTuiApp } from "./tui-app.js";
 import { ProcessTerminal } from "@mingxu/tui";
@@ -1103,40 +1104,47 @@ export async function runChatPrompt(options: {
 }): Promise<{ sessionId?: string }> {
   let messageActive = false;
   let messageHadText = false;
+  const projection = new CliRuntimeProjection();
   const unsubscribe = options.session.subscribe((event) => {
-    if (event.type === "message_start") {
-      messageActive = true;
-      messageHadText = false;
+    const result = projection.applyAgentEvent(event);
+    if (!result.changed) {
       return;
     }
-    if (event.type === "message_update") {
-      const delta = event.delta as { type?: string; text?: string } | undefined;
-      if (delta?.type === "text_delta" && typeof delta.text === "string") {
-        options.stdout.write(delta.text);
-        messageHadText = true;
+    for (const appliedEvent of result.appliedEvents) {
+      if (appliedEvent.type === "message_start") {
+        messageActive = true;
+        messageHadText = false;
+        continue;
       }
-      return;
-    }
-    if (event.type === "tool_execution_start") {
-      if (messageActive && messageHadText) {
-        options.stdout.write("\n");
+      if (appliedEvent.type === "message_update") {
+        const delta = appliedEvent.delta as { type?: string; text?: string } | undefined;
+        if (delta?.type === "text_delta" && typeof delta.text === "string") {
+          options.stdout.write(delta.text);
+          messageHadText = true;
+        }
+        continue;
       }
-      messageActive = false;
-      messageHadText = false;
-      options.stderr.write(`[tool] ${event.toolCall.name}\n`);
-      return;
-    }
-    if (event.type === "tool_execution_end") {
-      options.stderr.write(`[tool] ${event.toolCall.name} done\n`);
-      return;
-    }
-    if (event.type === "error") {
-      if (messageHadText) {
-        options.stdout.write("\n");
+      if (appliedEvent.type === "tool_execution_start") {
+        if (messageActive && messageHadText) {
+          options.stdout.write("\n");
+        }
+        messageActive = false;
+        messageHadText = false;
+        options.stderr.write(`[tool] ${appliedEvent.toolCall.name}\n`);
+        continue;
       }
-      const error = event.error as unknown;
-      const message = redactText(error instanceof Error ? error.message : String(error));
-      options.stderr.write(`Error: ${message}\n`);
+      if (appliedEvent.type === "tool_execution_end") {
+        options.stderr.write(`[tool] ${appliedEvent.toolCall.name} done\n`);
+        continue;
+      }
+      if (appliedEvent.type === "error") {
+        if (messageHadText) {
+          options.stdout.write("\n");
+        }
+        const error = appliedEvent.error as unknown;
+        const message = redactText(error instanceof Error ? error.message : String(error));
+        options.stderr.write(`Error: ${message}\n`);
+      }
     }
   });
 
