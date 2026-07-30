@@ -9,6 +9,7 @@ import type {
   AgentState,
   Message,
   ModelProvider,
+  ToolCall,
 } from "./types.js";
 import type { AgentEventListener, AgentEvent } from "../events/types.js";
 import type { MemoryEntry, MemoryQuery, MemoryScope } from "../memory/memory-scope.js";
@@ -56,7 +57,7 @@ export class Agent {
   }
 
   get state(): AgentState {
-    return structuredClone(this.#state);
+    return snapshotAgentState(this.#state);
   }
 
   subscribe(listener: AgentEventListener): () => void {
@@ -196,11 +197,7 @@ function makeInitialState(options: AgentOptions): AgentState {
   return {
     model: options.modelKey ?? "default",
     messages: [],
-    tools: (options.tools ?? []).map(({ name, description, inputSchema }) => ({
-      name,
-      description,
-      inputSchema,
-    })),
+    tools: (options.tools ?? []).map(snapshotToolDefinition),
     isStreaming: false,
     pendingToolCalls: [],
     ...(options.systemPrompt !== undefined
@@ -252,6 +249,104 @@ async function loadMemory(
     visibleToModel: true,
     metadata: { source: "memory", scope: entry.scope, key: entry.key },
   }));
+}
+
+function snapshotAgentState(state: AgentState): AgentState {
+  return {
+    ...(state.systemPrompt !== undefined ? { systemPrompt: state.systemPrompt } : {}),
+    model: state.model,
+    messages: cloneSerializableValue(state.messages) as AgentMessage[],
+    tools: state.tools.map(snapshotToolDefinition),
+    isStreaming: state.isStreaming,
+    pendingToolCalls: cloneSerializableValue(state.pendingToolCalls) as ToolCall[],
+    ...(state.errorMessage !== undefined ? { errorMessage: state.errorMessage } : {}),
+    ...(state.currentTurn !== undefined
+      ? {
+          currentTurn: cloneSerializableValue(
+            state.currentTurn,
+          ) as NonNullable<AgentState["currentTurn"]>,
+        }
+      : {}),
+  };
+}
+
+function snapshotToolDefinition(tool: { name: string; description: string; inputSchema: unknown }): {
+  name: string;
+  description: string;
+  inputSchema: unknown;
+} {
+  return {
+    name: tool.name,
+    description: tool.description,
+    inputSchema: cloneSerializableValue(tool.inputSchema),
+  };
+}
+
+function cloneSerializableValue<T>(value: T, seen = new WeakMap<object, unknown>()): T {
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+
+  if (seen.has(value)) {
+    return seen.get(value) as T;
+  }
+
+  if (value instanceof Date) {
+    return new Date(value.getTime()) as T;
+  }
+
+  if (value instanceof RegExp) {
+    return new RegExp(value.source, value.flags) as T;
+  }
+
+  if (Array.isArray(value)) {
+    const clone: unknown[] = [];
+    seen.set(value, clone);
+    for (const item of value) {
+      clone.push(cloneSerializableValue(item, seen));
+    }
+    return clone as T;
+  }
+
+  if (value instanceof Map) {
+    const clone = new Map<unknown, unknown>();
+    seen.set(value, clone);
+    for (const [key, entryValue] of value.entries()) {
+      clone.set(cloneSerializableValue(key, seen), cloneSerializableValue(entryValue, seen));
+    }
+    return clone as T;
+  }
+
+  if (value instanceof Set) {
+    const clone = new Set<unknown>();
+    seen.set(value, clone);
+    for (const item of value.values()) {
+      clone.add(cloneSerializableValue(item, seen));
+    }
+    return clone as T;
+  }
+
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) {
+    if (value instanceof Error) {
+      return {
+        name: value.name,
+        message: value.message,
+        stack: value.stack,
+      } as T;
+    }
+    return undefined as T;
+  }
+
+  const clone: Record<string, unknown> = {};
+  seen.set(value, clone);
+  for (const [key, entryValue] of Object.entries(value as Record<string, unknown>)) {
+    const clonedValue = cloneSerializableValue(entryValue, seen);
+    if (clonedValue !== undefined) {
+      clone[key] = clonedValue;
+    }
+  }
+  return clone as T;
 }
 
 async function runSessionStartHook(

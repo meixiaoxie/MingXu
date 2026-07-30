@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { main } from "../src/cli/main.js";
 import { MINGXU_IDENTITY_PROMPT } from "../src/cli/identity.js";
+import { JsonlSessionStore } from "../src/session/jsonl-session-store.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -81,6 +82,26 @@ async function writeConfigFile(config: unknown) {
   return { root, configPath };
 }
 
+function createPipedStdin(text: string): NodeJS.ReadStream {
+  return {
+    isTTY: false,
+    setEncoding: vi.fn(),
+    async *[Symbol.asyncIterator]() {
+      yield text;
+    },
+  } as unknown as NodeJS.ReadStream;
+}
+
+function createEmptyPipedStdin(): NodeJS.ReadStream {
+  return {
+    isTTY: false,
+    setEncoding: vi.fn(),
+    async *[Symbol.asyncIterator]() {
+      return;
+    },
+  } as unknown as NodeJS.ReadStream;
+}
+
 describe("mingxu CLI", () => {
   it("prints help and version information", async () => {
     const stdout = { write: vi.fn() };
@@ -127,6 +148,62 @@ describe("mingxu CLI", () => {
       ).resolves.toBe(0);
       expect(run).toHaveBeenCalledOnce();
       expect(stdout.write).toHaveBeenCalledWith("mocked result\n");
+      expect(stderr.write).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("chat 命令在非 TTY 下会走一次性管道输入", async () => {
+    const { root, configPath } = await writeConfigFile({
+      defaultModel: "selected",
+      models: {
+        selected: { provider: "anthropic", model: "claude-sonnet-5", apiKey: "test-key" },
+      },
+    });
+
+    try {
+      const run = vi.fn(async (_config, prompt?: string) => {
+        expect(prompt).toBe("Pipe prompt");
+        return "pipe reply";
+      });
+      const stdout = { write: vi.fn(), isTTY: false };
+      const stderr = { write: vi.fn() };
+      const stdin = createPipedStdin("Pipe prompt\n");
+
+      await expect(
+        main(["--config", configPath, "chat"], { run, stdout, stderr, stdin }),
+      ).resolves.toBe(0);
+      expect(run).toHaveBeenCalledOnce();
+      expect(stdout.write).toHaveBeenCalledWith("pipe reply\n");
+      expect(stderr.write).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("直接启动在非 TTY 管道输入下会自动退回一次性执行", async () => {
+    const { root, configPath } = await writeConfigFile({
+      defaultModel: "selected",
+      models: {
+        selected: { provider: "anthropic", model: "claude-sonnet-5", apiKey: "test-key" },
+      },
+    });
+
+    try {
+      const run = vi.fn(async (_config, prompt?: string) => {
+        expect(prompt).toBe("Direct prompt");
+        return "direct reply";
+      });
+      const stdout = { write: vi.fn(), isTTY: false };
+      const stderr = { write: vi.fn() };
+      const stdin = createPipedStdin("Direct prompt\n");
+
+      await expect(
+        main(["--config", configPath], { run, stdout, stderr, stdin }),
+      ).resolves.toBe(0);
+      expect(run).toHaveBeenCalledOnce();
+      expect(stdout.write).toHaveBeenCalledWith("direct reply\n");
       expect(stderr.write).not.toHaveBeenCalled();
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -313,6 +390,149 @@ describe("mingxu CLI", () => {
       await expect(main(["--config", configPath, "resume", "session-123", "--prompt", "Continue work"], { stdout, stderr, run })).resolves.toBe(0);
       expect(stdout.write).toHaveBeenCalledWith("resumed\n");
       expect(stderr.write).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resume 在非 TTY 管道输入下也能继续会话", async () => {
+    const { root, configPath } = await writeConfigFile({
+      defaultModel: "primary",
+      models: {
+        primary: { provider: "anthropic", model: "claude-sonnet-5", apiKey: "test-key" },
+      },
+    });
+
+    try {
+      const stdout = { write: vi.fn(), isTTY: false };
+      const stderr = { write: vi.fn() };
+      const stdin = createPipedStdin("Continue work\n");
+      const run = vi.fn(async (_config, prompt?: string, modelKey?: string, sessionId?: string) => {
+        expect(prompt).toBe("Continue work");
+        expect(modelKey).toBeUndefined();
+        expect(sessionId).toBe("session-123");
+        return "resumed";
+      });
+
+      await expect(
+        main(["--config", configPath, "resume", "session-123"], { stdout, stderr, run, stdin }),
+      ).resolves.toBe(0);
+      expect(stdout.write).toHaveBeenCalledWith("resumed\n");
+      expect(stderr.write).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resume 在非 TTY 且缺少 session id 时会明确失败", async () => {
+    const { root, configPath } = await writeConfigFile({
+      defaultModel: "primary",
+      models: {
+        primary: { provider: "anthropic", model: "claude-sonnet-5", apiKey: "test-key" },
+      },
+    });
+
+    try {
+      const stdout = { write: vi.fn(), isTTY: false };
+      const stderr = { write: vi.fn() };
+      const stdin = createPipedStdin("Continue work\n");
+      const run = vi.fn();
+
+      await expect(
+        main(["--config", configPath, "resume"], { stdout, stderr, run, stdin }),
+      ).resolves.toBe(1);
+      expect(run).not.toHaveBeenCalled();
+      expect(stderr.write).toHaveBeenCalledWith(expect.stringContaining("requires an interactive terminal"));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("--continue 在非 TTY 下会自动接上最近一次会话", async () => {
+    const { root, configPath } = await writeConfigFile({
+      defaultModel: "primary",
+      session: {
+        enabled: true,
+        dir: "sessions",
+        save: true,
+      },
+      models: {
+        primary: { provider: "anthropic", model: "claude-sonnet-5", apiKey: "test-key" },
+      },
+    });
+
+    try {
+      const store = new JsonlSessionStore(join(root, "sessions"));
+      const document = await store.createSession({ title: "latest" });
+      await store.saveSession(document, document.revision);
+
+      const stdout = { write: vi.fn(), isTTY: false };
+      const stderr = { write: vi.fn() };
+      const stdin = createPipedStdin("Continue work\n");
+      const run = vi.fn(async (_config, prompt?: string, modelKey?: string, sessionId?: string) => {
+        expect(prompt).toBe("Continue work");
+        expect(modelKey).toBeUndefined();
+        expect(sessionId).toBe(document.session.sessionId);
+        return "continued";
+      });
+
+      await expect(
+        main(["--config", configPath, "--continue"], { stdout, stderr, run, stdin }),
+      ).resolves.toBe(0);
+      expect(stdout.write).toHaveBeenCalledWith("continued\n");
+      expect(stderr.write).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("--continue 在没有可恢复会话时会明确失败", async () => {
+    const { root, configPath } = await writeConfigFile({
+      defaultModel: "primary",
+      session: {
+        enabled: true,
+        dir: "sessions",
+        save: true,
+      },
+      models: {
+        primary: { provider: "anthropic", model: "claude-sonnet-5", apiKey: "test-key" },
+      },
+    });
+
+    try {
+      const stdout = { write: vi.fn(), isTTY: false };
+      const stderr = { write: vi.fn() };
+      const stdin = createEmptyPipedStdin();
+      const run = vi.fn();
+
+      await expect(
+        main(["--config", configPath, "--continue"], { stdout, stderr, run, stdin }),
+      ).resolves.toBe(1);
+      expect(run).not.toHaveBeenCalled();
+      expect(stderr.write).toHaveBeenCalledWith(expect.stringContaining("No saved sessions were found for --continue"));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("stdout 被重定向且没有 prompt 时会明确失败", async () => {
+    const { root, configPath } = await writeConfigFile({
+      defaultModel: "primary",
+      models: {
+        primary: { provider: "anthropic", model: "claude-sonnet-5", apiKey: "test-key" },
+      },
+    });
+
+    try {
+      const stdout = { write: vi.fn(), isTTY: false };
+      const stderr = { write: vi.fn() };
+      const stdin = createEmptyPipedStdin();
+
+      await expect(
+        main(["--config", configPath], { stdout, stderr, stdin }),
+      ).resolves.toBe(1);
+      expect(stderr.write).toHaveBeenCalledWith(expect.stringContaining("No prompt was provided"));
+      expect(stdout.write).not.toHaveBeenCalled();
     } finally {
       await rm(root, { recursive: true, force: true });
     }

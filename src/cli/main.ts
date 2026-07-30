@@ -60,6 +60,7 @@ export interface CliDependencies {
   doctorProbe?: (config: ResolvedAgentConfig) => Promise<void>;
   stdout?: Pick<NodeJS.WriteStream, "write">;
   stderr?: Pick<NodeJS.WriteStream, "write">;
+  stdin?: NodeJS.ReadStream;
   version?: string;
   debugProvider?: boolean;
 }
@@ -89,6 +90,7 @@ export async function main(
 ): Promise<number> {
   const stdout = dependencies.stdout ?? process.stdout;
   const stderr = dependencies.stderr ?? process.stderr;
+  const stdin = dependencies.stdin ?? process.stdin;
 
   try {
     const args = parseArgs(argv);
@@ -132,6 +134,9 @@ export async function main(
     const configFilePath = args.configProvided
       ? args.configPath
       : (configDiscovery.sources.at(-1)?.path ?? process.cwd());
+    const continueSessionId = args.continueMode
+      ? await resolveContinueSessionId(config, configFilePath)
+      : undefined;
     const run = dependencies.run ?? createDefaultRunner(
       configFilePath,
       stderr,
@@ -157,9 +162,29 @@ export async function main(
       return result.ok ? 0 : 1;
     }
 
-    if (args.command === "chat"
-      || (args.command === "resume" && !args.prompt)
-      || (args.command === undefined && !args.prompt && process.stdin.isTTY && process.stdout.isTTY)) {
+    const interactiveTerminal = isTTYStream(stdin) && isTTYStream(stdout);
+    const stdinPrompt = !interactiveTerminal && args.prompt === undefined && shouldReadStdinPrompt(args.command)
+      ? await readStdinPrompt(stdin)
+      : undefined;
+    const effectivePrompt = args.prompt ?? stdinPrompt?.trim();
+    const resumeSessionId = args.command === "resume"
+      ? (args.commandTarget ?? continueSessionId)
+      : continueSessionId;
+
+    if (args.continueMode && resumeSessionId === undefined) {
+      stderr.write("No saved sessions were found for --continue. Start a session first, or use /new for a fresh chat.\n");
+      return 1;
+    }
+
+    if (
+      interactiveTerminal
+      && (
+        args.command === "chat"
+        || (args.command === "resume" && !args.prompt)
+        || (args.command === undefined && !args.prompt)
+        || (args.continueMode && !args.prompt)
+      )
+    ) {
       const chatResult = await runChatLoop({
         config,
         configFilePath,
@@ -171,7 +196,7 @@ export async function main(
         configSources: configDiscovery.sources,
         ...(args.model !== undefined ? { modelKey: args.model } : {}),
         ...(args.prompt !== undefined ? { initialPrompt: args.prompt } : {}),
-        ...(args.command === "resume" ? { resumeSessionId: args.commandTarget } : {}),
+        ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
       });
       if (chatResult.exitCode !== 0) {
         return chatResult.exitCode;
@@ -179,15 +204,80 @@ export async function main(
       return 0;
     }
 
-    const result = await run(config, args.prompt, args.model, args.command === "resume" ? args.commandTarget : undefined);
-    const normalizedResult = normalizeRunResult(result);
-    if (normalizedResult !== undefined) stdout.write(`${normalizedResult.content}\n`);
-    return 0;
+    if (args.command === "resume" && args.commandTarget === undefined && resumeSessionId === undefined) {
+      stderr.write("resume without a session id requires an interactive terminal. Pass <sessionId> when stdin/stdout are redirected.\n");
+      return 1;
+    }
+
+    if (shouldUseOneShotFallback(args.command, effectivePrompt)) {
+      const result = await run(
+        config,
+        effectivePrompt,
+        args.model,
+        resumeSessionId,
+      );
+      const normalizedResult = normalizeRunResult(result);
+      if (normalizedResult !== undefined) stdout.write(`${normalizedResult.content}\n`);
+      return 0;
+    }
+
+    stderr.write(`${formatNonInteractivePromptError(args.command)}\n`);
+    return 1;
   } catch (error) {
     const message = redactText(error instanceof Error ? error.message : String(error));
     stderr.write(`Error: ${message}\n`);
     return 1;
   }
+}
+
+function shouldReadStdinPrompt(command: string | undefined): boolean {
+  return command === "chat" || command === "resume" || command === undefined;
+}
+
+function shouldUseOneShotFallback(command: string | undefined, prompt: string | undefined): boolean {
+  if (prompt === undefined || prompt.trim().length === 0) {
+    return false;
+  }
+  return command === undefined || command === "chat" || command === "resume";
+}
+
+function formatNonInteractivePromptError(command: string | undefined): string {
+  switch (command) {
+    case "chat":
+      return "chat mode needs a prompt when stdin or stdout is not a TTY. Pipe text in or pass --prompt.";
+    case "resume":
+      return "resume needs a prompt when stdin or stdout is not a TTY. Pipe text in or pass --prompt.";
+    default:
+      return "No prompt was provided. Pipe text in, pass --prompt, or run mingxu in an interactive terminal.";
+  }
+}
+
+function isTTYStream(stream: Pick<NodeJS.WriteStream, "write"> | NodeJS.ReadStream): boolean {
+  return Boolean((stream as NodeJS.WriteStream).isTTY);
+}
+
+async function resolveContinueSessionId(
+  config: ResolvedAgentConfig,
+  configFilePath: string,
+): Promise<string | undefined> {
+  const sessionStore = await createSessionStore(config, configFilePath);
+  if (!sessionStore) {
+    return undefined;
+  }
+  const recentSessions = await sessionStore.listRecentSessions(1);
+  return recentSessions[0]?.sessionId;
+}
+
+async function readStdinPrompt(stdin: NodeJS.ReadStream): Promise<string | undefined> {
+  if (stdin.isTTY) {
+    return undefined;
+  }
+  stdin.setEncoding("utf8");
+  let buffer = "";
+  for await (const chunk of stdin) {
+    buffer += chunk;
+  }
+  return buffer.length > 0 ? buffer : undefined;
 }
 
 function normalizeRunResult(result: string | void | AgentLoopResult | undefined): AgentLoopResult | undefined {
