@@ -33,8 +33,9 @@ _Released 2026-07-30._
 - Reframed MingXu as a general Agent brain with no default file or command tools.
 - Split `@mingxu/plugin-sdk` into a standalone protocol package with stable plugin API v1 types.
 - Added standalone source skeletons for `@mingxu/coding-tools` and `@mingxu/web-search`.
-- Added the CLI `extensions` command tree and extension manager flow for local inspection and lifecycle management.
+- Added the CLI `extensions` command tree and the extension manager flow for `inspect`, `add`, `update`, `enable`, `disable`, `remove`, `list`, `doctor`, and `init`.
 - Kept the default install at a zero-tool baseline so file, command, search, and other “hands” still come only from user-selected plugins or MCP.
+- Added the native extension adapter registry and the install / enable / disable / rollback flow needed for a real local extension lifecycle.
 - Updated the README, roadmap, and Windows usage notes so the 0.4 story now matches the actual repository state.
 - Left marketplace, remote registry, auto-install, and fully implemented ecosystem adapters for later releases.
 

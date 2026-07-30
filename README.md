@@ -12,7 +12,7 @@ MingXu 是一个通用 Agent 大脑。
 - 单轮执行：`mingxu --prompt "..."` 或直接传位置参数
 - 恢复会话：`mingxu resume <session-id>`、`mingxu --continue`
 - 配置与诊断：`mingxu init --global`、`mingxu init --project`、`mingxu doctor`
-- 扩展管理：`mingxu extensions inspect/add/list/enable/disable/remove/doctor/init`
+- 扩展管理：`mingxu extensions inspect/add/update/enable/disable/remove/list/doctor/init`
 - 面板入口：`/context`、`/extensions`、`/agents`、`/audit`、`/trust`、`/preset`、`/compact`、`/steer`
 
 ## 怎么安装
@@ -135,13 +135,14 @@ mingxu.cmd --continue
 ## 怎么用 extensions
 
 `extensions` 是当前版本的本地扩展管理入口。
-它负责检查、安装、启用、停用和删除本地插件包。
+它负责检查、安装、更新、启用、停用和删除本地插件包。
 
 常用命令：
 
 ```powershell
 mingxu.cmd extensions inspect .\packages\coding-tools
 mingxu.cmd extensions add .\packages\coding-tools --scope user --yes
+mingxu.cmd extensions update mingxu-coding-tools .\packages\coding-tools --yes
 mingxu.cmd extensions list
 mingxu.cmd extensions enable mingxu-coding-tools
 mingxu.cmd extensions disable mingxu-coding-tools
@@ -168,13 +169,14 @@ mingxu.cmd
 
 ## 当前边界
 
-现在的 0.4 目标是“扩展闭环”。
+现在的 0.4 目标是“扩展安装与治理闭环”。
 已经完成的主要部分有：
 
 - `@mingxu/plugin-sdk` 独立协议包骨架
 - `@mingxu/coding-tools` 独立官方编码插件骨架
 - `@mingxu/web-search` 独立联网搜索插件骨架
 - CLI 的 `extensions` 命令树
+- `extensions` 的本地安装、更新、启用、停用、删除和诊断流
 - Windows `mingxu.cmd` 的真实安装与启动说明
 
 还没完成的部分有：
