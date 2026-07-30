@@ -9,6 +9,7 @@ import { truncateToWidth, visibleWidth, wrapText } from "@mingxu/tui";
 import type { CliRuntimeContext, CliRuntimeSnapshot, CliSessionRequest } from "./runtime-types.js";
 import { formatChatHelp, suggestChatCommands } from "./chat-commands.js";
 import { redactText, redactValue } from "../redaction/redactor.js";
+import { resolveTranscriptTheme } from "./transcript-theme.js";
 
 interface ConversationBlock {
   readonly id: string;
@@ -57,6 +58,7 @@ export class CliTuiApp {
   readonly #screen: CliTuiScreen;
   readonly #editor: Editor;
   readonly #conversation = new ConversationViewModel();
+  readonly #transcriptTheme;
   #snapshot: CliRuntimeSnapshot | undefined;
   #currentSession: AgentSession;
   #currentSessionId: string | undefined;
@@ -83,12 +85,16 @@ export class CliTuiApp {
     session: AgentSession;
     modelKey?: string;
     sessionId?: string;
+    plain?: boolean;
   }) {
     this.#runtime = options.runtime;
     this.#terminal = options.terminal;
     this.#currentSession = options.session;
     this.#currentSessionId = options.sessionId;
     this.#currentModelKey = options.modelKey;
+    this.#transcriptTheme = resolveTranscriptTheme({
+      ...(options.plain === true ? { plain: true } : {}),
+    });
     this.#conversation.setEmptyHint([
       "No messages yet. Type a prompt or /help.",
       "Try /status, /extensions, or /agents to inspect the runtime.",
@@ -664,8 +670,7 @@ export class CliTuiApp {
     const activeModel = this.#currentModelKey ?? snapshot?.defaultModel ?? "default";
     const header = this.#showWelcomeBanner
       ? [
-          `MingXu | session: ${this.#currentSessionId ?? "new"} | model: ${activeModel}`,
-          `cwd: ${process.cwd()}`,
+          `MingXu | model: ${activeModel} | cwd: ${process.cwd()} | trust: ${snapshot?.projectTrusted ? "trusted" : "untrusted"}`,
         ]
       : [];
 
@@ -1049,6 +1054,7 @@ export class CliTuiApp {
   #renderConversation(width: number): string[] {
     return this.#conversation.render(width, {
       detailed: this.#detailedTranscript,
+      theme: this.#transcriptTheme,
     });
   }
 
@@ -1118,19 +1124,9 @@ export class CliTuiApp {
   }
 
   #renderFooter(snapshot: CliRuntimeSnapshot | undefined, activeModel: string, width: number): string[] {
-    const auditState = snapshot?.audit.enabled
-      ? snapshot.audit.healthy
-        ? "healthy"
-        : "unhealthy"
-      : "disabled";
-    const trustState = snapshot?.projectTrusted ? "trusted" : "untrusted";
-    const tools = this.#currentSession.state.tools?.length ?? 0;
     const context = this.#currentSession.state.messages.length;
     const status = this.#lastStatus;
-    const footer = truncateToWidth(
-      `state: ${this.#running ? "streaming" : "idle"} | model: ${activeModel} | audit: ${auditState} | trust: ${trustState} | tools: ${tools} | ctx: ${context} | ${status}`,
-      width,
-    );
+    const footer = truncateToWidth(`state: ${this.#running ? "streaming" : "idle"} | model: ${activeModel} | ctx: ${context} | ${status}`, width);
     return [footer];
   }
 

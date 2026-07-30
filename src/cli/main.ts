@@ -65,7 +65,7 @@ export interface CliDependencies {
   debugProvider?: boolean;
 }
 
-const HELP_TEXT = `Usage: mingxu [options] [prompt]\n\nCommands:\n  init                    Create a starter config\n  chat [prompt]           Enter interactive chat mode\n  doctor                  Check config, env, plugins, session, and audit wiring\n  resume [sessionId]      Resume a saved session and continue with a new prompt\n  sessions                List recent sessions\n  extensions [action]     Inspect and manage installed extensions\n\nExtensions actions:\n  inspect <source>        Inspect an extension source without installing\n  add <source>            Install an extension as disabled by default\n  update <id> [source]    Update an installed extension\n  enable <id>             Enable an installed extension\n  disable <id>            Disable an installed extension\n  remove <id>             Remove a disabled extension\n  list                    List installed extensions\n  doctor                  Diagnose extension installation health\n  init <directory>        Create an extension skeleton\n\nOptions:\n  -c, --config <path>     JSON configuration file\n  -p, --prompt <text>     Prompt to send to the agent\n  -m, --model <name>      Named model from config.models\n      --continue          Resume the latest session in the current workspace\n      --yes               Skip confirmation for extension install/update\n      --temporary         Apply enable/disable only for the current process\n      --scope <scope>     Target extension scope: user or project\n      --global            Write init output to the global config location\n      --project           Write init output to the project config location\n      --no-global-config  Ignore the global config layer\n      --trust-project     Trust the detected project config layer\n      --no-trust-project  Ignore the detected project config layer\n      --profile <name>    Init profile: minimal or secure-local\n      --online            Allow doctor to perform a live provider connectivity probe\n      --debug-provider    Print resolved provider config and request diagnostics to stderr\n  -h, --help              Show this help\n  -v, --version           Show the version\n`;
+const HELP_TEXT = `Usage: mingxu [options] [prompt]\n\nCommands:\n  init                    Create a starter config\n  chat [prompt]           Enter interactive chat mode\n  doctor                  Check config, env, plugins, session, and audit wiring\n  resume [sessionId]      Resume a saved session and continue with a new prompt\n  sessions                List recent sessions\n  extensions [action]     Inspect and manage installed extensions\n\nExtensions actions:\n  inspect <source>        Inspect an extension source without installing\n  add <source>            Install an extension as disabled by default\n  update <id> [source]    Update an installed extension\n  enable <id>             Enable an installed extension\n  disable <id>            Disable an installed extension\n  remove <id>             Remove a disabled extension\n  list                    List installed extensions\n  doctor                  Diagnose extension installation health\n  init <directory>        Create an extension skeleton\n\nOptions:\n  -c, --config <path>     JSON configuration file\n  -p, --prompt <text>     Prompt to send to the agent\n  -m, --model <name>      Named model from config.models\n      --continue          Resume the latest session in the current workspace\n      --yes               Skip confirmation for extension install/update\n      --temporary         Apply enable/disable only for the current process\n      --scope <scope>     Target extension scope: user or project\n      --global            Write init output to the global config location\n      --project           Write init output to the project config location\n      --no-global-config  Ignore the global config layer\n      --trust-project     Trust the detected project config layer\n      --no-trust-project  Ignore the detected project config layer\n      --profile <name>    Init profile: minimal or secure-local\n      --plain             Disable ANSI styling in the interactive transcript\n      --online            Allow doctor to perform a live provider connectivity probe\n      --debug-provider    Print resolved provider config and request diagnostics to stderr\n  -h, --help              Show this help\n  -v, --version           Show the version\n`;
 
 type MutableInstructionLoaderOptions = {
   systemPrompt?: string;
@@ -219,6 +219,7 @@ export async function main(
         projectTrusted: configDiscovery.projectTrusted,
         configSources: configDiscovery.sources,
         createTerminal,
+        ...(args.plain ? { plain: true } : {}),
         ...(args.model !== undefined ? { modelKey: args.model } : {}),
         ...(args.prompt !== undefined ? { initialPrompt: args.prompt } : {}),
         ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
@@ -330,6 +331,7 @@ async function runChatLoop(options: {
   projectTrusted: boolean;
   configSources: readonly { kind: "explicit" | "global" | "project"; path: string }[];
   createTerminal: (stdin: NodeJS.ReadStream, stdout: NodeJS.WriteStream) => ProcessTerminal;
+  plain?: boolean;
   modelKey?: string;
   initialPrompt?: string;
   resumeSessionId?: string;
@@ -361,6 +363,7 @@ async function runChatLoop(options: {
       runtime,
       terminal: options.createTerminal(process.stdin, process.stdout),
       session,
+      ...(options.plain ? { plain: true } : {}),
       ...(currentModelKey !== undefined ? { modelKey: currentModelKey } : {}),
       ...(currentSessionId !== undefined ? { sessionId: currentSessionId } : {}),
     });

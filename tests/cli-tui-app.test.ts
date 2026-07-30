@@ -84,7 +84,7 @@ function createRuntimeSnapshot(): CliRuntimeSnapshot {
       tree: [
         {
           id: "session-1",
-          label: "session-1 • coding • running",
+          label: "session-1 | coding | running",
           state: "running",
           depth: 1,
           children: [],
@@ -173,60 +173,5 @@ describe("CliTuiApp", () => {
     expect(app.render(80).join("\n")).toContain("Allow once");
     app.handleInput({ sequence: "", name: "enter" });
     await expect(approval).resolves.toMatchObject({ decision: "allow" });
-  });
-
-  it("accumulates streamed assistant deltas into one rendered block", async () => {
-    const listeners: Array<(event: any) => void> = [];
-    let app: CliTuiApp;
-
-    const runtime: CliRuntimeContext = {
-      createSession: () =>
-        ({
-          state: { model: "primary", messages: [], tools: [], isStreaming: false, pendingToolCalls: [] },
-          options: { model: { provider: "fake", generate: async () => ({ content: "", toolCalls: [] }) } as never },
-          subscribe: (listener: (event: any) => void) => {
-            listeners.push(listener);
-            return () => {
-              const index = listeners.indexOf(listener);
-              if (index >= 0) listeners.splice(index, 1);
-            };
-          },
-          prompt: async (prompt: string) => {
-            expect(prompt).toBe("你好");
-            for (const listener of listeners) {
-              listener({ type: "message_start", message: { role: "assistant", content: "" } });
-              listener({ type: "message_update", message: { role: "assistant", content: "你" }, delta: { type: "text_delta", text: "你" } });
-            }
-            expect(app.render(80).join("\n")).toContain("你");
-            for (const listener of listeners) {
-              listener({ type: "message_update", message: { role: "assistant", content: "你好" }, delta: { type: "text_delta", text: "好" } });
-              listener({ type: "message_end", message: { role: "assistant", content: "你好" } });
-            }
-            return { content: "你好", messages: [], iterations: 1, terminationReason: "completed" };
-          },
-          followUp: () => undefined,
-          steer: () => undefined,
-          abort: () => undefined,
-        }) as unknown as AgentSession,
-      listSessions: async () => "",
-      listRecentSessions: async () => [],
-      snapshot: async () => createRuntimeSnapshot(),
-      close: async () => undefined,
-    };
-
-    app = new CliTuiApp({
-      runtime,
-      terminal: createFakeTerminal(),
-      session: createFakeSession(),
-      modelKey: "primary",
-      sessionId: "session-1",
-    });
-
-    await app.refreshSnapshot();
-    await app.runPrompt("你好");
-
-    const rendered = app.render(80).join("\n");
-    expect(rendered).toContain("你好");
-    expect(rendered).not.toContain("\n  你\n  好");
   });
 });

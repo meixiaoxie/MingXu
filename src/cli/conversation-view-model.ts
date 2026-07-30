@@ -4,6 +4,7 @@ import type { ApprovalDecision, ApprovalPrompt, ApprovalResponse } from "../appr
 import type { ToolCall, ToolResult } from "../core/messages.js";
 import { redactText, redactValue } from "../redaction/redactor.js";
 import { sanitizeTerminalText, truncateToWidth, visibleWidth, wrapText } from "@mingxu/tui";
+import { styleTranscript, type TranscriptTheme, type TranscriptTone } from "./transcript-theme.js";
 
 export type ConversationBlockKind = "user" | "assistant" | "tool" | "status" | "error" | "approval-result";
 
@@ -22,6 +23,7 @@ export interface ConversationBlock {
 export interface ConversationRenderOptions {
   readonly detailed?: boolean;
   readonly maxBlocks?: number;
+  readonly theme?: TranscriptTheme;
 }
 
 export class ConversationViewModel {
@@ -85,11 +87,12 @@ export class ConversationViewModel {
   }
 
   startToolMessage(id: string, toolCall: ToolCall, source?: string): ConversationBlock {
+    const input = this.#describeToolInput(toolCall.input);
     return this.#upsertBlock(id, "tool", {
       title: toolCall.name,
       state: "streaming",
-      summary: this.#describeToolInput(toolCall.input),
-      lines: [`input: ${this.#describeToolInput(toolCall.input)}`],
+      summary: input,
+      lines: [`input: ${input}`],
       live: true,
       ...(source ? { source } : {}),
     });
@@ -124,7 +127,7 @@ export class ConversationViewModel {
     return this.#upsertBlock(id, "tool", {
       title: toolCall.name,
       state: result.isError ? "error" : "complete",
-      summary: this.#describeToolSummary(toolCall.name, result),
+      summary: this.#describeToolSummary(result),
       lines: body,
       live: false,
       ...(source ? { source } : {}),
@@ -173,6 +176,7 @@ export class ConversationViewModel {
   render(width: number, options: ConversationRenderOptions = {}): string[] {
     const detailed = options.detailed === true;
     const maxBlocks = options.maxBlocks ?? 999;
+    const theme = options.theme;
     const blocks = this.#blocks.slice(-maxBlocks);
     if (blocks.length === 0) {
       return [...this.#emptyHint];
@@ -180,12 +184,13 @@ export class ConversationViewModel {
 
     const lines: string[] = [];
     for (const block of blocks) {
-      lines.push(this.#renderHeader(block, width));
-      const body = this.#renderBody(block, width, detailed);
-      if (body.length > 0) {
-        lines.push(...body);
+      const rendered = detailed
+        ? this.#renderDetailedBlock(block, width, theme)
+        : this.#renderCompactOrDetailedBlock(block, width, theme);
+      if (rendered.length === 0) {
+        continue;
       }
-      lines.push("");
+      lines.push(...rendered, "");
     }
     if (lines.length > 0 && lines[lines.length - 1] === "") {
       lines.pop();
@@ -242,41 +247,107 @@ export class ConversationViewModel {
     }
   }
 
-  #describeToolSummary(name: string, result: ToolResult): string {
+  #describeToolSummary(result: ToolResult): string {
     const status = result.isError ? "error" : "done";
     const suffix = result.truncated ? " - truncated" : "";
-    return `${name} - ${status}${suffix}`;
+    return `${status}${suffix}`;
   }
 
-  #renderHeader(block: ConversationBlock, width: number): string {
-    const symbols: Record<ConversationBlockKind, string> = {
-      user: "You",
-      assistant: "MingXu",
-      tool: "Tool",
-      status: "Status",
-      error: "Error",
-      "approval-result": "Approval",
-    };
-    const prefix = symbols[block.kind];
-    const title = block.kind === "assistant" ? "" : ` - ${block.title}`;
-    const state = block.live ? " - streaming" : block.state === "error" ? " - error" : "";
-    return truncateToWidth(`${prefix}${title}${state}`, width);
+  #renderCompactOrDetailedBlock(block: ConversationBlock, width: number, theme: TranscriptTheme | undefined): string[] {
+    if (block.kind === "status" && block.title === "run") {
+      return [];
+    }
+    if (block.kind === "user" || block.kind === "assistant") {
+      return this.#renderDetailedBlock(block, width, theme);
+    }
+    const text = this.#compactText(block);
+    return [this.#styleLine(this.#prefix(block, text, width), theme, this.#toneForBlock(block), width)];
   }
 
-  #renderBody(block: ConversationBlock, width: number, detailed: boolean): string[] {
+  #renderDetailedBlock(block: ConversationBlock, width: number, theme: TranscriptTheme | undefined): string[] {
+    const header = this.#styleLine(this.#prefix(block, this.#headerText(block), width), theme, this.#toneForBlock(block), width);
     const bodyWidth = Math.max(1, width - 2);
-    if (block.kind === "tool" && !detailed && block.state !== "error") {
-      return block.summary ? [`  ${truncateToWidth(block.summary, bodyWidth)}`] : [];
-    }
-
-    if (block.kind === "status" && !detailed) {
-      return block.lines.length > 0 ? [`  ${truncateToWidth(block.lines[0]!, bodyWidth)}`] : [];
-    }
-
-    const lines = block.lines.length > 0 ? block.lines : (block.summary ? [block.summary] : []);
-    return lines.flatMap((line) => {
+    const bodySource = block.lines.length > 0 ? block.lines : (block.summary ? [block.summary] : []);
+    const body = bodySource.flatMap((line) => {
       const wrapped = wrapText(line, bodyWidth);
-      return wrapped.map((wrappedLine) => `  ${truncateToWidth(wrappedLine, bodyWidth)}`);
+      return wrapped.map((wrappedLine) => this.#styleLine(`  ${truncateToWidth(wrappedLine, bodyWidth)}`, theme, this.#toneForBlock(block), bodyWidth));
     });
+    return body.length > 0 ? [header, ...body] : [header];
+  }
+
+  #compactText(block: ConversationBlock): string {
+    if (block.kind === "status" && block.title === "run") {
+      return "";
+    }
+    if (block.summary) {
+      return `${block.title}: ${block.summary}`;
+    }
+    return block.title;
+  }
+
+  #headerText(block: ConversationBlock): string {
+    switch (block.kind) {
+      case "user":
+        return block.title;
+      case "assistant":
+        return block.title;
+      case "tool":
+        return block.live ? `${block.title} (running)` : block.state === "error" ? `${block.title} (error)` : `${block.title} (done)`;
+      case "status":
+        return block.title;
+      case "error":
+        return block.title;
+      case "approval-result":
+        return block.title;
+    }
+  }
+
+  #prefix(block: ConversationBlock, text: string, width: number): string {
+    const symbol = this.#symbolForBlock(block);
+    return truncateToWidth(`${symbol} ${text}`.trim(), width);
+  }
+
+  #symbolForBlock(block: ConversationBlock): string {
+    switch (block.kind) {
+      case "user":
+        return ">";
+      case "assistant":
+        return "~";
+      case "tool":
+        if (block.state === "streaming") return "*";
+        if (block.state === "error") return "!";
+        return "+";
+      case "status":
+        return "-";
+      case "error":
+        return "!";
+      case "approval-result":
+        return "?";
+    }
+  }
+
+  #styleLine(line: string, theme: TranscriptTheme | undefined, tone: TranscriptTone, width?: number): string {
+    const plain = width !== undefined ? truncateToWidth(line, width) : line;
+    if (!theme) {
+      return plain;
+    }
+    return styleTranscript(theme, tone, plain);
+  }
+
+  #toneForBlock(block: ConversationBlock): TranscriptTone {
+    switch (block.kind) {
+      case "user":
+        return "user";
+      case "assistant":
+        return "assistant";
+      case "tool":
+        return block.state === "error" ? "error" : "tool";
+      case "status":
+        return "status";
+      case "error":
+        return "error";
+      case "approval-result":
+        return "accent";
+    }
   }
 }
