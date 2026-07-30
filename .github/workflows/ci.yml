@@ -24,11 +24,6 @@ jobs:
         # actions/checkout v4
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
 
-      # Corepack activates the pnpm version declared in package.json, keeping
-      # local development and CI on the same package-manager release.
-      - name: Enable Corepack
-        run: corepack enable
-
       - name: Set up pnpm
         # pnpm/action-setup v4
         uses: pnpm/action-setup@fe02b2b198060655c91e734aa9d15097341251d0
@@ -41,6 +36,7 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       # A frozen lockfile prevents CI from silently resolving dependency
       # versions that were not reviewed and committed to the repository.
@@ -66,9 +62,6 @@ jobs:
         # actions/checkout v4
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
 
-      - name: Enable Corepack
-        run: corepack enable
-
       - name: Set up pnpm
         # pnpm/action-setup v4
         uses: pnpm/action-setup@fe02b2b198060655c91e734aa9d15097341251d0
@@ -81,6 +74,7 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

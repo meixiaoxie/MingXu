@@ -21,9 +21,6 @@ jobs:
         # actions/checkout v4
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
 
-      - name: Enable Corepack
-        run: corepack enable
-
       - name: Set up pnpm
         # pnpm/action-setup v4
         uses: pnpm/action-setup@fe02b2b198060655c91e734aa9d15097341251d0
@@ -36,6 +33,7 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
           registry-url: https://registry.npmjs.org
 
       - name: Install dependencies
