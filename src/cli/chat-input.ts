@@ -1,7 +1,7 @@
 import { clearScreenDown, emitKeypressEvents } from "node:readline";
 import { createInterface } from "node:readline/promises";
 
-import { Editor, CURSOR_MARKER, type KeyInput } from "@mingxu/tui";
+import { Editor, CURSOR_MARKER, visibleWidth, type KeyInput } from "@mingxu/tui";
 import { formatChatHelp, suggestChatCommands } from "./chat-commands.js";
 
 export interface ChatInputOptions {
@@ -154,8 +154,30 @@ export class ChatInputController {
     }
     this.#output.write("\r");
     clearScreenDown(this.#output);
-    const lines = (this.#editor?.render(this.#output.columns || 80) ?? []).map((line) => line.replace(CURSOR_MARKER, ""));
+    const rendered = this.#editor?.render(this.#output.columns || 80) ?? [];
+    let cursorRow = rendered.length - 1;
+    let cursorColumn = visibleWidth(rendered.at(-1) ?? "");
+    let cursorFound = false;
+    const lines = rendered.map((line, row) => {
+      const markerIndex = line.indexOf(CURSOR_MARKER);
+      if (markerIndex >= 0) {
+        cursorRow = row;
+        cursorColumn = visibleWidth(line.slice(0, markerIndex));
+        cursorFound = true;
+      }
+      return line.replace(CURSOR_MARKER, "");
+    });
     this.#output.write(lines.join("\n"));
+    if (cursorFound) {
+      const rowsUp = Math.max(0, lines.length - 1 - cursorRow);
+      if (rowsUp > 0) {
+        this.#output.write(`\u001b[${rowsUp}A`);
+      }
+      this.#output.write("\r");
+      if (cursorColumn > 0) {
+        this.#output.write(`\u001b[${cursorColumn + 1}G`);
+      }
+    }
   }
 
   #renderHelp(): void {

@@ -85,7 +85,7 @@ export function wrapText(value: string, width: number): string[] {
   return lines.length > 0 ? lines : [""];
 }
 
-function splitGraphemes(value: string): string[] {
+export function splitGraphemes(value: string): string[] {
   const segmenter = (Intl as typeof Intl & { Segmenter?: new (locale?: string, options?: Intl.SegmenterOptions) => Intl.Segmenter }).Segmenter;
   if (segmenter) {
     const iterator = new segmenter(undefined, { granularity: "grapheme" }).segment(value);

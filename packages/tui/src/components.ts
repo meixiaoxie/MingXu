@@ -1,5 +1,5 @@
 import { CURSOR_MARKER, type Component, type ComponentAction, type KeyInput } from "./types.js";
-import { padToWidth, truncateToWidth, visibleWidth, wrapText } from "./strings.js";
+import { padToWidth, splitGraphemes, truncateToWidth, visibleWidth, wrapText } from "./strings.js";
 
 export interface TextOptions {
   readonly text: string;
@@ -129,23 +129,34 @@ export interface EditorOptions {
   readonly completionProvider?: (value: string) => readonly SelectListItem[];
 }
 
+interface CursorPosition {
+  readonly row: number;
+  readonly column: number;
+}
+
 export class Editor implements Component {
   readonly #prompt: string;
   readonly #placeholder: string;
   readonly #completionProvider: ((value: string) => readonly SelectListItem[]) | undefined;
   readonly #history: string[];
+  readonly #promptGraphemeCount: number;
   #value = "";
   #cursor = 0;
   #historyIndex: number | undefined;
+  #draftBeforeHistory: string | undefined;
   #completionItems: readonly SelectListItem[] = [];
   #completionIndex = 0;
   #menuVisible = false;
+  #completionSuppressed = false;
+  #renderWidth = 80;
+  #layout: readonly CursorPosition[] = [];
 
   constructor(options: EditorOptions = {}) {
     this.#prompt = options.prompt ?? "> ";
     this.#placeholder = options.placeholder ?? "";
     this.#completionProvider = options.completionProvider;
     this.#history = [...(options.history ?? [])];
+    this.#promptGraphemeCount = splitGraphemes(this.#prompt).length;
   }
 
   get value(): string {
@@ -156,9 +167,12 @@ export class Editor implements Component {
     this.#value = "";
     this.#cursor = 0;
     this.#historyIndex = undefined;
+    this.#draftBeforeHistory = undefined;
     this.#menuVisible = false;
+    this.#completionSuppressed = false;
     this.#completionItems = [];
     this.#completionIndex = 0;
+    this.#layout = [];
   }
 
   pushHistory(value: string): void {
@@ -187,6 +201,11 @@ export class Editor implements Component {
       return submitted ? { type: "submit", value: submitted } : { type: "none" };
     }
 
+    if (input.ctrl && input.name === "j") {
+      this.#insert("\n");
+      return { type: "none" };
+    }
+
     if (input.name === "backspace") {
       this.#deleteBackward();
       return { type: "none" };
@@ -199,29 +218,39 @@ export class Editor implements Component {
 
     if (input.name === "left") {
       this.#cursor = Math.max(0, this.#cursor - 1);
+      this.#syncCompletionState();
       return { type: "none" };
     }
 
     if (input.name === "right") {
-      this.#cursor = Math.min(this.#value.length, this.#cursor + 1);
+      this.#cursor = Math.min(this.#valueGraphemeCount(), this.#cursor + 1);
+      this.#syncCompletionState();
       return { type: "none" };
     }
 
     if (input.name === "home" || (input.ctrl && input.name === "a")) {
-      this.#cursor = 0;
+      this.#cursor = input.ctrl && input.name === "a"
+        ? 0
+        : this.#currentLineRange().start;
+      this.#syncCompletionState();
       return { type: "none" };
     }
 
     if (input.name === "end" || (input.ctrl && input.name === "e")) {
-      this.#cursor = this.#value.length;
+      this.#cursor = input.ctrl && input.name === "e"
+        ? this.#valueGraphemeCount()
+        : this.#currentLineRange().end;
+      this.#syncCompletionState();
       return { type: "none" };
     }
 
     if (input.name === "up") {
       if (this.#menuVisible && this.#completionItems.length > 0) {
         this.#completionIndex = (this.#completionIndex - 1 + this.#completionItems.length) % this.#completionItems.length;
-      } else {
+      } else if (!this.#moveVertical(-1)) {
         this.#historyUp();
+      } else {
+        this.#syncCompletionState();
       }
       return { type: "none" };
     }
@@ -229,8 +258,10 @@ export class Editor implements Component {
     if (input.name === "down") {
       if (this.#menuVisible && this.#completionItems.length > 0) {
         this.#completionIndex = (this.#completionIndex + 1) % this.#completionItems.length;
-      } else {
+      } else if (!this.#moveVertical(1)) {
         this.#historyDown();
+      } else {
+        this.#syncCompletionState();
       }
       return { type: "none" };
     }
@@ -238,9 +269,11 @@ export class Editor implements Component {
     if (input.name === "escape") {
       if (this.#menuVisible) {
         this.#menuVisible = false;
+        this.#completionSuppressed = true;
+        this.#completionItems = [];
+        this.#completionIndex = 0;
         return { type: "none" };
       }
-      this.clear();
       return { type: "none" };
     }
 
@@ -261,23 +294,9 @@ export class Editor implements Component {
   }
 
   render(width: number): string[] {
-    const inputLine = `${this.#prompt}${this.#value || this.#placeholder}`;
-    const lines = this.#value.length > 0
-      ? splitWithCursor(inputLine, this.#prompt.length + this.#cursor)
-      : [inputLine];
-
-    const completionProvider = this.#completionProvider;
-    if (completionProvider && this.#value.trim().startsWith("/")) {
-      this.#completionItems = completionProvider(this.#value.trim());
-      this.#menuVisible = this.#completionItems.length > 0;
-      if (this.#completionIndex >= this.#completionItems.length) {
-        this.#completionIndex = 0;
-      }
-    } else {
-      this.#menuVisible = false;
-      this.#completionItems = [];
-      this.#completionIndex = 0;
-    }
+    this.#renderWidth = Math.max(1, width);
+    this.#syncCompletionState();
+    const lines = this.#buildRenderedLines(this.#renderWidth);
 
     if (!this.#menuVisible) {
       return lines;
@@ -292,65 +311,238 @@ export class Editor implements Component {
   }
 
   #insert(text: string): void {
-    this.#value = `${this.#value.slice(0, this.#cursor)}${text}${this.#value.slice(this.#cursor)}`;
-    this.#cursor += text.length;
+    const normalized = normalizeEditorText(text);
+    if (!normalized) {
+      return;
+    }
+    this.#completionSuppressed = false;
+    const value = splitGraphemes(this.#value);
+    const inserted = splitGraphemes(normalized);
+    value.splice(this.#cursor, 0, ...inserted);
+    this.#value = value.join("");
+    this.#cursor += inserted.length;
     this.#historyIndex = undefined;
+    this.#draftBeforeHistory = undefined;
+    this.#syncCompletionState();
   }
 
   #deleteBackward(): void {
     if (this.#cursor === 0) {
       return;
     }
-    this.#value = `${this.#value.slice(0, this.#cursor - 1)}${this.#value.slice(this.#cursor)}`;
+    this.#completionSuppressed = false;
+    const value = splitGraphemes(this.#value);
+    value.splice(this.#cursor - 1, 1);
+    this.#value = value.join("");
     this.#cursor -= 1;
     this.#historyIndex = undefined;
+    this.#draftBeforeHistory = undefined;
+    this.#syncCompletionState();
   }
 
   #deleteForward(): void {
-    if (this.#cursor >= this.#value.length) {
+    const value = splitGraphemes(this.#value);
+    if (this.#cursor >= value.length) {
       return;
     }
-    this.#value = `${this.#value.slice(0, this.#cursor)}${this.#value.slice(this.#cursor + 1)}`;
+    this.#completionSuppressed = false;
+    value.splice(this.#cursor, 1);
+    this.#value = value.join("");
     this.#historyIndex = undefined;
+    this.#draftBeforeHistory = undefined;
+    this.#syncCompletionState();
   }
 
   #historyUp(): void {
     if (this.#history.length === 0) {
       return;
     }
+    this.#completionSuppressed = false;
+    if (this.#historyIndex === undefined) {
+      this.#draftBeforeHistory = this.#value;
+    }
     const nextIndex = this.#historyIndex === undefined ? this.#history.length - 1 : Math.max(0, this.#historyIndex - 1);
     this.#historyIndex = nextIndex;
     this.#value = this.#history[nextIndex] ?? "";
-    this.#cursor = this.#value.length;
+    this.#cursor = this.#valueGraphemeCount();
+    this.#syncCompletionState();
   }
 
   #historyDown(): void {
     if (this.#history.length === 0 || this.#historyIndex === undefined) {
       return;
     }
+    this.#completionSuppressed = false;
     if (this.#historyIndex >= this.#history.length - 1) {
       this.#historyIndex = undefined;
-      this.#value = "";
-      this.#cursor = 0;
+      this.#value = this.#draftBeforeHistory ?? "";
+      this.#draftBeforeHistory = undefined;
+      this.#cursor = this.#valueGraphemeCount();
+      this.#syncCompletionState();
       return;
     }
     this.#historyIndex += 1;
     this.#value = this.#history[this.#historyIndex] ?? "";
-    this.#cursor = this.#value.length;
+    this.#cursor = this.#valueGraphemeCount();
+    this.#syncCompletionState();
   }
 
   #applyCompletion(item: SelectListItem): void {
-    const current = this.#value.slice(0, this.#cursor);
-    const prefixMatch = current.match(/(?:^|\s)\/[^\s]*/u);
-    if (!prefixMatch) {
+    const value = splitGraphemes(this.#value);
+    const prefix = value.slice(0, this.#cursor);
+    if (!prefix.join("").startsWith("/")) {
       return;
     }
-    const start = current.length - prefixMatch[0].length;
-    const before = this.#value.slice(0, start);
-    const after = this.#value.slice(this.#cursor);
-    this.#value = `${before}/${item.id}${after.startsWith(" ") ? "" : " "}${after}`;
-    this.#cursor = before.length + item.id.length + 2;
+    const suffix = value.slice(this.#cursor);
+    const separator = suffix[0] === " " || suffix.length === 0 ? "" : " ";
+    const replacement = splitGraphemes(`/${item.id}${separator}`);
+    this.#value = [...replacement, ...suffix].join("");
+    this.#cursor = replacement.length;
+    this.#completionSuppressed = true;
     this.#menuVisible = false;
+    this.#completionItems = [];
+    this.#completionIndex = 0;
+  }
+
+  #syncCompletionState(): void {
+    if (this.#completionSuppressed) {
+      this.#menuVisible = false;
+      this.#completionItems = [];
+      this.#completionIndex = 0;
+      return;
+    }
+    const prefix = splitGraphemes(this.#value).slice(0, this.#cursor).join("");
+    if (this.#completionProvider && prefix.startsWith("/")) {
+      this.#completionItems = this.#completionProvider(prefix);
+      this.#menuVisible = this.#completionItems.length > 0;
+      if (this.#completionIndex >= this.#completionItems.length) {
+        this.#completionIndex = 0;
+      }
+      return;
+    }
+
+    this.#menuVisible = false;
+    this.#completionItems = [];
+    this.#completionIndex = 0;
+  }
+
+  #valueGraphemeCount(): number {
+    return splitGraphemes(this.#value).length;
+  }
+
+  #currentLineRange(): { start: number; end: number } {
+    const segments = splitGraphemes(this.#value);
+    let start = 0;
+    for (let index = 0; index < this.#cursor && index < segments.length; index += 1) {
+      if (segments[index] === "\n") {
+        start = index + 1;
+      }
+    }
+
+    let end = segments.length;
+    for (let index = this.#cursor; index < segments.length; index += 1) {
+      if (segments[index] === "\n") {
+        end = index;
+        break;
+      }
+    }
+
+    return { start, end };
+  }
+
+  #moveVertical(delta: number): boolean {
+    if (this.#layout.length === 0) {
+      return false;
+    }
+
+    const currentIndex = this.#promptGraphemeCount + this.#cursor;
+    const current = this.#layout[currentIndex];
+    if (!current) {
+      return false;
+    }
+
+    const targetRow = current.row + delta;
+    if (targetRow < 0) {
+      return false;
+    }
+
+    let chosenIndex: number | undefined;
+    let chosenDistance = Number.POSITIVE_INFINITY;
+    let chosenColumn = Number.POSITIVE_INFINITY;
+
+    for (let index = this.#promptGraphemeCount; index < this.#layout.length; index += 1) {
+      const position = this.#layout[index];
+      if (!position || position.row !== targetRow) {
+        continue;
+      }
+      const distance = Math.abs(position.column - current.column);
+      if (distance < chosenDistance || (distance === chosenDistance && position.column < chosenColumn)) {
+        chosenIndex = index;
+        chosenDistance = distance;
+        chosenColumn = position.column;
+      }
+    }
+
+    if (chosenIndex === undefined) {
+      return false;
+    }
+
+    this.#cursor = Math.max(0, chosenIndex - this.#promptGraphemeCount);
+    this.#syncCompletionState();
+    return true;
+  }
+
+  #buildRenderedLines(width: number): string[] {
+    if (this.#value.length === 0) {
+      this.#layout = [];
+      return wrapText(`${this.#prompt}${this.#placeholder}`, width);
+    }
+
+    const display = `${this.#prompt}${this.#value}`;
+    const segments = splitGraphemes(display);
+    const cursorIndex = this.#promptGraphemeCount + this.#cursor;
+    const positions = new Array<CursorPosition>(segments.length + 1);
+    const lines: string[] = [];
+    let currentLine = "";
+    let row = 0;
+    let column = 0;
+    positions[0] = { row, column };
+
+    for (let index = 0; index < segments.length; index += 1) {
+      if (index === cursorIndex) {
+        currentLine += CURSOR_MARKER;
+      }
+
+      const segment = segments[index] ?? "";
+      if (segment === "\n") {
+        lines.push(currentLine);
+        currentLine = "";
+        row += 1;
+        column = 0;
+        positions[index + 1] = { row, column };
+        continue;
+      }
+
+      const segmentWidth = visibleWidth(segment);
+      if (column > 0 && column + segmentWidth > width) {
+        lines.push(currentLine);
+        currentLine = "";
+        row += 1;
+        column = 0;
+      }
+
+      currentLine += segment;
+      column += segmentWidth;
+      positions[index + 1] = { row, column };
+    }
+
+    if (cursorIndex === segments.length) {
+      currentLine += CURSOR_MARKER;
+    }
+
+    lines.push(currentLine);
+    this.#layout = positions;
+    return lines;
   }
 }
 
@@ -491,8 +683,6 @@ export class Diff implements Component {
   }
 }
 
-function splitWithCursor(value: string, cursorIndex: number): string[] {
-  const before = value.slice(0, cursorIndex);
-  const after = value.slice(cursorIndex);
-  return [`${before}${CURSOR_MARKER}${after}`];
+function normalizeEditorText(value: string): string {
+  return value.replace(/\r\n?/gu, "\n");
 }
