@@ -1,0 +1,21 @@
+{
+  "apiVersion": "mingxu/plugin-v1",
+  "id": "mingxu-web-search",
+  "name": "MingXu Web Search",
+  "version": "0.4.0",
+  "kind": "tool",
+  "entry": "index.js",
+  "description": "Optional web search plugin skeleton for future Brave, Tavily, and SearXNG adapters.",
+  "permissions": {
+    "files": "none",
+    "network": "allow",
+    "commands": "none"
+  },
+  "contributions": [
+    {
+      "kind": "tool",
+      "name": "web_search",
+      "description": "Search the web through a configured backend and return structured sources."
+    }
+  ]
+}

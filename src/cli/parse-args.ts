@@ -5,13 +5,16 @@ export interface CliArguments {
   readonly prompt: string | undefined;
   readonly help: boolean;
   readonly version: boolean;
-  readonly command?: "resume" | "sessions" | "init" | "doctor" | "chat";
+  readonly command?: "resume" | "sessions" | "init" | "doctor" | "chat" | "extensions";
   readonly commandTarget?: string;
+  readonly commandArgs?: readonly string[];
   readonly profile?: "minimal" | "secure-local";
   readonly initScope?: "global" | "project";
   readonly online?: boolean;
   readonly debugProvider?: boolean;
   readonly continueMode?: boolean;
+  readonly yes?: boolean;
+  readonly scope?: "user" | "project";
   readonly noGlobalConfig?: boolean;
   readonly trustProject?: boolean;
   readonly noTrustProject?: boolean;
@@ -27,11 +30,14 @@ export function parseArgs(argv: readonly string[]): CliArguments {
   let version = false;
   let command: CliArguments["command"];
   let commandTarget: string | undefined;
+  let commandArgs: string[] = [];
   let profile: CliArguments["profile"];
   let initScope: CliArguments["initScope"];
   let online = false;
   let debugProvider = false;
   let continueMode = false;
+  let yes = false;
+  let scope: CliArguments["scope"];
   let noGlobalConfig = false;
   let trustProject = false;
   let noTrustProject = false;
@@ -54,6 +60,8 @@ export function parseArgs(argv: readonly string[]): CliArguments {
       command = "doctor";
     } else if (argument === "chat") {
       command = "chat";
+    } else if (argument === "extensions") {
+      command = "extensions";
     } else if (argument === "--profile") {
       const value = readOptionValue(argv, ++index, argument);
       if (value !== "minimal" && value !== "secure-local") {
@@ -70,6 +78,14 @@ export function parseArgs(argv: readonly string[]): CliArguments {
       debugProvider = true;
     } else if (argument === "--continue") {
       continueMode = true;
+    } else if (argument === "--yes" || argument === "-y") {
+      yes = true;
+    } else if (argument === "--scope") {
+      const value = readOptionValue(argv, ++index, argument);
+      if (value !== "user" && value !== "project") {
+        throw new Error(`Unsupported scope: ${value}`);
+      }
+      scope = value;
     } else if (argument === "--no-global-config") {
       noGlobalConfig = true;
     } else if (argument === "--trust-project") {
@@ -104,6 +120,10 @@ export function parseArgs(argv: readonly string[]): CliArguments {
   }
 
   const positionalPrompt = positionals.length > 0 ? positionals.join(" ") : undefined;
+  if (command === "extensions") {
+    commandTarget = positionals[0];
+    commandArgs = positionals.slice(1);
+  }
   return {
     configPath,
     configProvided,
@@ -113,11 +133,14 @@ export function parseArgs(argv: readonly string[]): CliArguments {
     version,
     ...(command !== undefined ? { command } : {}),
     ...(commandTarget !== undefined ? { commandTarget } : {}),
+    ...(commandArgs.length > 0 ? { commandArgs } : {}),
     ...(profile !== undefined ? { profile } : {}),
     ...(initScope !== undefined ? { initScope } : {}),
     ...(online ? { online } : {}),
     ...(debugProvider ? { debugProvider } : {}),
     ...(continueMode ? { continueMode } : {}),
+    ...(yes ? { yes } : {}),
+    ...(scope !== undefined ? { scope } : {}),
     ...(noGlobalConfig ? { noGlobalConfig } : {}),
     ...(trustProject ? { trustProject } : {}),
     ...(noTrustProject ? { noTrustProject } : {}),

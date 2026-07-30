@@ -62,6 +62,7 @@ function createRuntimeSnapshot(): CliRuntimeSnapshot {
     presets: [
       { version: "v1", name: "coding", description: "Coding preset", modelKey: "primary", tools: ["echo"] },
     ],
+    extensions: [],
     mcpServers: [
       { name: "files", transport: "stdio", connected: false },
     ],

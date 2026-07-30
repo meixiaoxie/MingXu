@@ -1,40 +1,51 @@
 # MingXu 开发路线图
 
-这份文件只记录当前真实状态，不把未完成的能力写成已完成。
+这份文档只记录当前真实状态，不把未完成能力写成已完成。
 
-## 当前版本状态
+## 阶段总览
 
 | 阶段 | 主题 | 状态 | 说明 |
 | --- | --- | --- | --- |
-| 0 | 基线和文档 | 已完成 | ADR、第三方来源说明、基线测试和文档修正已补齐。 |
-| 1 | 统一事件 | 已完成 | Runtime event 和基础审计链已统一。 |
+| 0 | 基线与文档 | 已完成 | ADR、第三方来源说明、基线测试和文档修正已补齐。 |
+| 1 | 统一事件 | 已完成 | Runtime event 和基础审计链已经统一。 |
 | 2 | 统一模型流边界 | 已完成 | `ModelExecutor` 成为唯一流式边界。 |
 | 3 | 统一工具生命周期 | 已完成 | policy / approval / audit / executor 收敛到单入口。 |
 | 4 | Session 迁移 | 已完成 | 新会话路径切到 JSONL，legacy 输入仍兼容。 |
-| 5 | AgentSession / CLI 收口 | 已完成 | `CLI -> AgentSession -> Agent -> runAgentLoop` 已成为主链。 |
+| 5 | AgentSession / CLI 收口 | 已完成 | `CLI -> AgentSession -> Agent -> runAgentLoop` 已成主链。 |
 | 6 | 上下文压缩 | 已完成 | compaction、切点和 overflow recovery 已接入。 |
-| 7 | 指令、Memory、资源和安全 | 已完成 | 五层指令、Memory、Resource 和安全边界已落地。 |
-| 8 | Extensions / MCP / Skills / Subagent | 已完成 | MCP、Skills、Preset、Subagent 的本地 MVP 已接入。 |
-| 9 | 旧轨道清理 | 已完成 | 旧入口和旧兼容出口已经收口。 |
+| 7 | 指令、Memory、资源和安全边界 | 已完成 | 五层指令、Memory、Resource 和安全边界已落地。 |
+| 8 | Extensions / MCP / Skills / Subagent | 已完成 | 本地扩展、MCP、Skills、Preset 和 Subagent 的本地 MVP 已接入。 |
+| 9 | 旧轨道清理 | 已完成 | 旧入口和旧兼容导出已收口。 |
 | 10 | CLI 0.2 闭环 | 已完成 | 安装、首次配置、聊天、resume、continue、doctor 已可用。 |
-| 11 | 0.4.0 通用大脑边界 | 进行中 | 默认安装已收紧为零内建工具，插件协议和包边界正在继续完善。 |
+| 11 | 0.4 扩展闭环 | 进行中 | 正在把扩展包骨架、安装器、扩展中心和 Windows 使用说明收口成稳定产品。 |
+| 12 | 更完整的生态兼容 | 规划中 | 第三方生态 adapter、更多搜索后端和更完整的扩展安装体验留到后续版本。 |
 
-## 0.4.0 当前重点
+## 0.4 当前已经完成的内容
 
-- 默认安装不再默认带文件、命令、浏览器、联网搜索等手脚工具。
-- `@mingxu/plugin-sdk` 正在作为独立协议面向插件开发者收口。
-- `skill` 和 `resource` 已进入插件/manifest schema，后续会继续补本地安装和扩展中心闭环。
-- package、build、test、smoke、pack 已同步到 `0.4.0`。
+- `@mingxu/plugin-sdk` 已经拆成独立协议包骨架。
+- `@mingxu/coding-tools` 已经有独立官方编码插件骨架。
+- `@mingxu/web-search` 已经有独立联网搜索插件骨架。
+- CLI 已经有 `extensions` 命令树，可以做本地扩展管理。
+- README 已经补上 Windows 安装、AI 接入和 `extensions` 使用说明。
+- 0.4 的版本口径已经调整为“扩展闭环阶段”，不再把插件市场和远程 registry 写成完成项。
 
-## 近期已完成
+## 0.4 仍在推进的内容
 
-- CLI 默认工具注册已收紧为零。
-- 本地插件 metadata 现在可以表达更完整的 v1 类型。
-- smoke 安装链已验证 `mingxu.cmd` / `mingxu` 包装可用。
+- 更完整的本地插件安装器与扩展中心交互。
+- 官方 `coding-tools` 的真实执行器和更完整的工具实现。
+- `web-search` 的 Brave / Tavily / SearXNG 后端接入。
+- 第三方开源插件与生态 adapter 的完整接入。
+- 更完整的用户可视化体验，但仍然不走全屏 TUI。
 
-## 接下来要做
+## 当前阶段的产品边界
 
-1. 补本地插件安装器和扩展中心的完整生命周期。
-2. 继续完善 official `coding-tools` 独立插件包。
-3. 把更多外部能力统一放到本地插件和 MCP 中。
-4. 持续收紧 TUI 和 session 状态投影，让默认安装保持干净。
+- MingXu 本体继续只做治理层和运行层。
+- 文件、命令、联网搜索、PDF、浏览器、数据库等“手脚”默认不内置。
+- 用户通过本地插件或 MCP 接入自己需要的专用能力。
+- 本地插件和 provider 代码仍然属于可信代码，不是 OS 或容器沙箱。
+
+## 下一步建议
+
+1. 把本地插件安装器和扩展中心做成更顺手的闭环。
+2. 把 `web-search` 和 `coding-tools` 的真实执行器补完。
+3. 为第三方生态 adapter 留好稳定入口，但先不扩大 0.4 的范围。

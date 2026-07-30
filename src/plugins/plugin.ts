@@ -37,6 +37,7 @@ export interface PluginManifestV1 {
   readonly contributions?: readonly {
     readonly kind: PluginKind;
     readonly name: string;
+    readonly description?: string;
   }[];
 }
 

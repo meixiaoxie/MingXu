@@ -1,1 +1,28 @@
-export * from "../../../src/plugins/index.js";
+export {
+  PLUGIN_API_VERSION,
+  defineExtensionAdapter,
+  definePluginManifest,
+} from "./protocol.js";
+export type {
+  ExtensionAdapterV1,
+  ExtensionDescriptor,
+  ExtensionInspectResult,
+  ExtensionLockFile,
+  ExtensionLockRecord,
+  ExtensionSource,
+  ExtensionSourceKind,
+  PluginApiVersion,
+  PluginContribution,
+  PluginContextV1,
+  PluginEvent,
+  PluginEventSink,
+  PluginKind,
+  PluginManifestV1,
+  PluginModuleV1,
+  PluginPermissions,
+  PluginToolDefinition,
+  PresentationBlock,
+  PresentationBlockKind,
+  PresentationBlockState,
+  ToolGovernance,
+} from "./protocol.js";

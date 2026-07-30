@@ -1,0 +1,46 @@
+{
+  "apiVersion": "mingxu/plugin-v1",
+  "id": "mingxu-coding-tools",
+  "name": "MingXu Coding Tools",
+  "version": "0.4.0",
+  "kind": "tool",
+  "entry": "index.js",
+  "description": "Official coding tools plugin skeleton for workspace-scoped file and command actions.",
+  "permissions": {
+    "files": "write",
+    "commands": "allow",
+    "network": "none"
+  },
+  "contributions": [
+    {
+      "kind": "tool",
+      "name": "read",
+      "description": "Read a workspace file without changing it."
+    },
+    {
+      "kind": "tool",
+      "name": "list",
+      "description": "List files and directories inside the workspace."
+    },
+    {
+      "kind": "tool",
+      "name": "search",
+      "description": "Search text inside workspace files."
+    },
+    {
+      "kind": "tool",
+      "name": "write",
+      "description": "Write a new workspace file."
+    },
+    {
+      "kind": "tool",
+      "name": "edit",
+      "description": "Edit an existing workspace file."
+    },
+    {
+      "kind": "tool",
+      "name": "command",
+      "description": "Run a workspace-scoped command with explicit argv."
+    }
+  ]
+}

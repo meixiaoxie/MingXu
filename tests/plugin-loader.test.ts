@@ -255,7 +255,7 @@ describe("PluginLoader", () => {
     const loader = new PluginLoader({ registerTool() {} });
 
     await expect(loader.load(modulePath)).rejects.toThrow(
-      "Plugin path must reference a JavaScript module (.js, .mjs, or .cjs)",
+      "Plugin path must reference a JavaScript module, a package directory, or a tarball",
     );
   });
 

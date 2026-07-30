@@ -6,6 +6,7 @@ import type { SkillDescriptor } from "../skills/skill-registry.js";
 import type { SubagentSnapshot } from "../subagents/subagent-manager.js";
 import type { ConfigLayerInfo } from "./config-discovery.js";
 import type { ApprovalHandler } from "../approval/types.js";
+import type { ExtensionDescriptor } from "../extensions/protocol.js";
 
 export interface CliSessionRequest {
   readonly modelKey?: string;
@@ -30,6 +31,7 @@ export interface CliRuntimeSnapshot {
   readonly resources: readonly ResolvedResource[];
   readonly skills: readonly SkillDescriptor[];
   readonly presets: readonly AgentPresetV1[];
+  readonly extensions: readonly ExtensionDescriptor[];
   readonly mcpServers: readonly {
     readonly name: string;
     readonly transport: string;

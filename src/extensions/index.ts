@@ -1,0 +1,25 @@
+export {
+  ExtensionManager,
+  type ExtensionInstallRequest,
+  type ExtensionInstallResult,
+  type ExtensionListEntry,
+  type ExtensionManagerOptions,
+} from "./extension-manager.js";
+export type {
+  ExtensionAdapterV1,
+  ExtensionContribution,
+  ExtensionDescriptor,
+  ExtensionInspectResult,
+  ExtensionKind,
+  ExtensionLockFile,
+  ExtensionLockRecord,
+  ExtensionManifestV1,
+  ExtensionPermissions,
+  ExtensionPlugin,
+  ExtensionPluginContext,
+  ExtensionSource,
+  ExtensionSourceKind,
+  PresentationBlock,
+  PresentationBlockKind,
+  PresentationBlockState,
+} from "./protocol.js";

@@ -138,6 +138,22 @@ export type {
   PresentationBlockKind,
   PresentationBlockState,
 } from "./plugins/index.js";
+export { ExtensionManager } from "./extensions/index.js";
+export type {
+  ExtensionAdapterV1,
+  ExtensionContribution,
+  ExtensionDescriptor,
+  ExtensionInspectResult,
+  ExtensionKind,
+  ExtensionLockFile,
+  ExtensionLockRecord,
+  ExtensionManifestV1,
+  ExtensionPermissions,
+  ExtensionPlugin,
+  ExtensionPluginContext,
+  ExtensionSource,
+  ExtensionSourceKind,
+} from "./extensions/index.js";
 export {
   agentConfigSchema,
   customProviderConfigSchema,

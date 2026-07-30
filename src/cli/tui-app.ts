@@ -367,6 +367,21 @@ export class CliTuiApp {
   async openExtensionsPanel(): Promise<void> {
     const snapshot = await this.#ensureSnapshot();
     const items: SelectPanelItem[] = [
+      ...snapshot.extensions.map((extension) => ({
+        id: `extension:${extension.id}`,
+        label: `${extension.id} (${extension.enabled ? "enabled" : "disabled"})`,
+        detailLines: [
+          `name: ${extension.name}`,
+          `version: ${extension.version}`,
+          `adapter: ${extension.adapterId}`,
+          `scope: ${extension.scope}`,
+          `health: ${extension.health}`,
+          `source: ${extension.source.kind}:${extension.source.locator}`,
+          `entry: ${extension.entryPath}`,
+          `permissions: ${extension.permissions ? JSON.stringify(extension.permissions) : "none"}`,
+        ],
+        value: extension.id,
+      })),
       ...snapshot.presets.map((preset) => ({
         id: `preset:${preset.name}`,
         label: `preset ${preset.name}`,

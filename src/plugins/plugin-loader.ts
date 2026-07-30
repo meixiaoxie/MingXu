@@ -1,4 +1,4 @@
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -20,7 +20,7 @@ export interface ResolvedPluginSource {
   readonly declaredPath: string;
   readonly resolvedPath: string;
   readonly trust: "trusted_local" | "blocked";
-  readonly sourceKind: "local_path" | "file_url";
+  readonly sourceKind: "local_path" | "file_url" | "directory" | "archive";
   readonly kind?: PluginKind;
   readonly manifest?: string;
 }
@@ -124,7 +124,7 @@ export async function resolvePluginLoadRequest(request: PluginLoadRequest): Prom
   }
 
   let resolvedPath: string;
-  let sourceKind: "local_path" | "file_url" = "local_path";
+  let sourceKind: ResolvedPluginSource["sourceKind"] = "local_path";
   if (trimmedPath.startsWith("file:")) {
     resolvedPath = parseLocalFileUrl(trimmedPath);
     sourceKind = "file_url";
@@ -143,10 +143,6 @@ export async function resolvePluginLoadRequest(request: PluginLoadRequest): Prom
       : resolve(configBaseDirectory, trimmedPath);
   }
 
-  if (!hasSupportedPluginExtension(resolvedPath)) {
-    throw new Error("Plugin path must reference a JavaScript module (.js, .mjs, or .cjs)");
-  }
-
   let pluginStats;
   try {
     pluginStats = await stat(resolvedPath);
@@ -156,8 +152,16 @@ export async function resolvePluginLoadRequest(request: PluginLoadRequest): Prom
     }
     throw error;
   }
-  if (!pluginStats.isFile()) {
-    throw new Error(`Plugin path must reference a file: ${request.path}`);
+  if (pluginStats.isDirectory()) {
+    sourceKind = "directory";
+  } else if (pluginStats.isFile()) {
+    if (looksLikeArchive(resolvedPath)) {
+      sourceKind = "archive";
+    } else if (!hasSupportedPluginExtension(resolvedPath)) {
+      throw new Error("Plugin path must reference a JavaScript module, a package directory, or a tarball");
+    }
+  } else {
+    throw new Error(`Plugin path must reference a file or directory: ${request.path}`);
   }
 
   return {
@@ -172,7 +176,8 @@ export async function resolvePluginLoadRequest(request: PluginLoadRequest): Prom
 
 async function importPlugin(request: PluginLoadRequest): Promise<Plugin> {
   const pluginSource = await resolvePluginLoadRequest(request);
-  const imported = await import(pathToFileURL(pluginSource.resolvedPath).href) as { default?: unknown; plugin?: unknown };
+  const entryPath = await resolvePluginEntryPath(pluginSource);
+  const imported = await import(pathToFileURL(entryPath).href) as { default?: unknown; plugin?: unknown };
   const candidate = imported.default ?? imported.plugin;
 
   if (!isPlugin(candidate)) {
@@ -183,6 +188,21 @@ async function importPlugin(request: PluginLoadRequest): Promise<Plugin> {
   validatePluginMetadata(pluginSource, pluginMetadata);
 
   return candidate;
+}
+
+async function resolvePluginEntryPath(source: ResolvedPluginSource): Promise<string> {
+  const resolvedStats = await stat(source.resolvedPath);
+  if (resolvedStats.isFile()) {
+    return source.resolvedPath;
+  }
+  if (resolvedStats.isDirectory()) {
+    const manifestPath = resolve(source.resolvedPath, "mingxu.plugin.json");
+    const manifest = parsePluginManifest(await readFile(manifestPath, "utf8"));
+    const entryPath = resolve(source.resolvedPath, manifest.entry ?? "index.js");
+    await stat(entryPath);
+    return entryPath;
+  }
+  throw new Error(`Plugin path must reference a file or directory: ${source.declaredPath}`);
 }
 
 function extractPluginMetadata(plugin: Plugin): PluginMetadata {
@@ -245,6 +265,42 @@ function isNetworkPath(value: string): boolean {
 function hasSupportedPluginExtension(value: string): boolean {
   const extension = /\.[^.\\/]+$/u.exec(value)?.[0].toLowerCase();
   return extension !== undefined && SUPPORTED_PLUGIN_EXTENSIONS.has(extension);
+}
+
+function looksLikeArchive(value: string): boolean {
+  const lower = value.toLowerCase();
+  return lower.endsWith(".tgz") || lower.endsWith(".tar.gz") || lower.endsWith(".tar");
+}
+
+function parsePluginManifest(source: string): PluginManifestV1 {
+  const parsed = JSON.parse(source) as Partial<PluginManifestV1>;
+  if (parsed.apiVersion !== "mingxu/plugin-v1") {
+    throw new Error("Extension manifest apiVersion must be mingxu/plugin-v1");
+  }
+  if (typeof parsed.id !== "string" || !parsed.id.trim()) {
+    throw new Error("Extension manifest id is required");
+  }
+  if (typeof parsed.name !== "string" || !parsed.name.trim()) {
+    throw new Error("Extension manifest name is required");
+  }
+  if (typeof parsed.version !== "string" || !parsed.version.trim()) {
+    throw new Error("Extension manifest version is required");
+  }
+  if (parsed.kind === undefined) {
+    throw new Error("Extension manifest kind is required");
+  }
+  return {
+    apiVersion: "mingxu/plugin-v1",
+    id: parsed.id.trim(),
+    name: parsed.name.trim(),
+    version: parsed.version.trim(),
+    kind: parsed.kind,
+    ...(parsed.entry !== undefined ? { entry: parsed.entry } : {}),
+    ...(parsed.description !== undefined ? { description: parsed.description } : {}),
+    ...(parsed.configSchema !== undefined ? { configSchema: parsed.configSchema } : {}),
+    ...(parsed.permissions !== undefined ? { permissions: parsed.permissions } : {}),
+    ...(parsed.contributions !== undefined ? { contributions: parsed.contributions } : {}),
+  };
 }
 
 function isNodeError(value: unknown): value is NodeJS.ErrnoException {

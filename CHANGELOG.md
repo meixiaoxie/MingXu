@@ -31,11 +31,12 @@ _Released 2026-07-29._
 _Released 2026-07-30._
 
 - Reframed MingXu as a general Agent brain with no default file or command tools.
-- Removed built-in tool registration from the CLI default path so a fresh install starts with a zero-tool baseline.
-- Expanded the plugin surface with `skill` and `resource` manifest kinds plus plugin API v1 presentation types.
-- Relaxed plugin loader metadata validation so non-tool manifests can be loaded as first-class plugin metadata.
-- Moved `@mingxu/plugin-sdk` toward a dedicated plugin-focused entry point.
-- Bumped the package version to `0.4.0` and updated install/package smoke coverage to match the new default behavior.
+- Split `@mingxu/plugin-sdk` into a standalone protocol package with stable plugin API v1 types.
+- Added standalone source skeletons for `@mingxu/coding-tools` and `@mingxu/web-search`.
+- Added the CLI `extensions` command tree and extension manager flow for local inspection and lifecycle management.
+- Kept the default install at a zero-tool baseline so file, command, search, and other “hands” still come only from user-selected plugins or MCP.
+- Updated the README, roadmap, and Windows usage notes so the 0.4 story now matches the actual repository state.
+- Left marketplace, remote registry, auto-install, and fully implemented ecosystem adapters for later releases.
 
 ## 0.3.0
 

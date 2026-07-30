@@ -1,25 +1,23 @@
 # MingXu
 
-> 当前版本：0.4.0
+> 版本：0.4.0
 
-MingXu 现在的定位是一个通用 Agent 大脑，不是内置编码能力的 Coding Agent。
-核心负责模型运行、指令、Context、Memory、Session、policy/approval/audit/budget/abort、MCP、Subagent 和扩展协议；文件、命令、浏览器、联网搜索、PDF、数据库、Git 这类“手脚”应当通过插件或 MCP 接入。
-
-默认安装不带任何文件或命令工具。
+MingXu 是一个通用 Agent 大脑。
+它负责模型运行、上下文、Memory、Session、policy / approval / audit / budget / abort、MCP、Subagent 和扩展治理。
+默认安装不带文件读取、命令执行、联网搜索、PDF、浏览器、数据库这些“手脚”，这些能力需要通过插件或 MCP 按需接入。
 
 ## 现在能做什么
 
-- 直接聊天：`mingxu`、`mingxu chat`
+- 交互聊天：`mingxu`、`mingxu chat`
 - 单轮执行：`mingxu --prompt "..."` 或直接传位置参数
-- 会话恢复：`mingxu resume <session-id>`、`mingxu --continue`、`mingxu sessions`
-- 配置管理：`mingxu init --global`、`mingxu init --project`、`mingxu doctor`
-- 交互面板：`/context`、`/extensions`、`/agents`、`/audit`、`/trust`、`/preset`
-- 命令菜单：`/help`、`/status`、`/model`、`/tools`、`/session`、`/sessions`、`/resume`、`/new`、`/clear`、`/exit`、`/compact`、`/steer`
-- 扩展边界：本地插件、MCP、Skills、Presets、Resources、Subagent 已进入治理链
+- 恢复会话：`mingxu resume <session-id>`、`mingxu --continue`
+- 配置与诊断：`mingxu init --global`、`mingxu init --project`、`mingxu doctor`
+- 扩展管理：`mingxu extensions inspect/add/list/enable/disable/remove/doctor/init`
+- 面板入口：`/context`、`/extensions`、`/agents`、`/audit`、`/trust`、`/preset`、`/compact`、`/steer`
 
-## 安装
+## 怎么安装
 
-先在仓库里构建，再全局安装：
+先在仓库里构建，再做全局安装：
 
 ```powershell
 pnpm install --frozen-lockfile
@@ -27,13 +25,16 @@ pnpm build
 npm install -g .
 ```
 
-Windows 上通常会得到 `mingxu.cmd`。
-如果 PowerShell 禁止执行脚本，请直接运行 `mingxu.cmd`。
-如果脚本允许执行，也可以直接运行 `mingxu`。
+Windows 上有两种启动方式：
+
+- PowerShell 允许脚本时：直接用 `mingxu`
+- PowerShell 脚本被策略拦截时：用 `mingxu.cmd`
+
+如果你看到 “无法加载 mingxu.ps1，因为在此系统上禁止运行脚本”，那就直接切到 `mingxu.cmd`，不用改 ExecutionPolicy。
 
 ## 怎么接 AI
 
-MingXu 支持这些内建 provider：
+MingXu 支持这些 provider：
 
 - `anthropic`
 - `openai`
@@ -41,7 +42,7 @@ MingXu 支持这些内建 provider：
 - `deepseek`
 - `gemini`
 
-最常见的方式是把 API Key 放到环境变量里，再在配置里用 `env:NAME` 引用。
+最常见的方式是把 API Key 放到环境变量，再在配置里用 `env:NAME` 引用它。
 
 ### DeepSeek
 
@@ -56,11 +57,14 @@ $env:DEEPSEEK_API_KEY = "你的 key"
     "chat": {
       "provider": "deepseek",
       "model": "deepseek-v4-flash",
-      "apiKey": "env:DEEPSEEK_API_KEY"
+      "apiKey": "env:DEEPSEEK_API_KEY",
+      "baseUrl": "https://api.deepseek.com"
     }
   }
 }
 ```
+
+如果你要走 OpenAI 兼容接口，可以把 provider 设为 `openai-compatible`，再改 `baseUrl`。
 
 ### OpenAI
 
@@ -100,125 +104,89 @@ $env:ANTHROPIC_API_KEY = "你的 key"
 }
 ```
 
-如果你接的是兼容 OpenAI 格式的中转服务，就用 `openai-compatible` 并配置 `baseUrl`。
+## 怎么启动
 
-## 怎么聊天
-
-交互聊天：
+如果你已经安装到全局：
 
 ```powershell
-mingxu
+mingxu.cmd
 ```
 
-或者：
+或者显式进入聊天模式：
 
 ```powershell
-mingxu chat
+mingxu.cmd chat
 ```
 
 单轮执行：
 
 ```powershell
-mingxu --prompt "帮我总结这个仓库"
-```
-
-也可以直接传位置参数：
-
-```powershell
-mingxu "帮我总结这个仓库"
+mingxu.cmd --prompt "帮我总结这个仓库"
 ```
 
 恢复会话：
 
 ```powershell
-mingxu sessions
-mingxu resume <session-id> --prompt "继续这个会话"
-mingxu --continue
+mingxu.cmd sessions
+mingxu.cmd resume <session-id> --prompt "继续这个会话"
+mingxu.cmd --continue
 ```
 
-## 常用命令
+## 怎么用 extensions
 
-- `/help`：帮助
-- `/status`：当前会话和模型状态
-- `/model`：查看或切换模型
-- `/tools`：查看当前可用工具
-- `/session`：显示当前会话 ID
-- `/sessions`：列出最近会话
-- `/resume [id]`：恢复会话
-- `/new`：新开会话
-- `/clear`：清屏
-- `/context`：查看指令、Memory、资源和上下文概况
-- `/extensions`：查看已加载的扩展
-- `/agents`：查看 Subagent 任务树
-- `/audit`：查看审计状态
-- `/trust`：查看项目信任状态
-- `/preset`：查看可用 preset
-- `/compact`：查看压缩状态
-- `/steer`：加入 steering 指令
-- `/exit`、`/quit`：退出
+`extensions` 是当前版本的本地扩展管理入口。
+它负责检查、安装、启用、停用和删除本地插件包。
 
-## 配置发现
-
-CLI 会按层加载配置：
-
-1. 全局配置
-2. 当前项目配置
-3. 显式命令行参数
-
-默认全局配置位置：
-
-- Windows：`%APPDATA%\mingxu\config.json`
-- Unix：`${XDG_CONFIG_HOME:-~/.config}/mingxu/config.json`
-
-项目配置会从当前目录向上查找最近的 `mingxu.config.json`。
-`MINGXU_USER_CONFIG_DIR` 可以覆盖全局配置目录。
-配置里的 `env:NAME` 会先解析成真实环境变量，再进入 provider、MCP header 和 runtime 配置。
-
-## doctor
+常用命令：
 
 ```powershell
-mingxu doctor
+mingxu.cmd extensions inspect .\packages\coding-tools
+mingxu.cmd extensions add .\packages\coding-tools --scope user --yes
+mingxu.cmd extensions list
+mingxu.cmd extensions enable mingxu-coding-tools
+mingxu.cmd extensions disable mingxu-coding-tools
+mingxu.cmd extensions remove mingxu-coding-tools
+mingxu.cmd extensions doctor
+mingxu.cmd extensions init .\my-extension
 ```
 
-`doctor` 主要检查：
+如果是在非 TTY 或 CI 场景里安装，通常要加 `--yes`，避免交互确认卡住流程。
 
-- 配置来源和合并结果
-- 路径是否真实存在
-- `env:` 引用是否可解析
-- 项目是否受信
-- 插件、资源和会话路径是否合理
-
-如果要做真实连通性检查，再加：
+安装后可以进交互界面再输入：
 
 ```powershell
-mingxu doctor --online
+mingxu.cmd
 ```
+
+然后在聊天里输入：
+
+```text
+/extensions
+```
+
+这样就能看到当前已加载的扩展。
 
 ## 当前边界
 
-现在的 MingXu 已经可以作为本地可安装的受治理 Agent CLI 使用，但还不是完整的扩展平台。
+现在的 0.4 目标是“扩展闭环”。
+已经完成的主要部分有：
 
-已经具备的部分：
+- `@mingxu/plugin-sdk` 独立协议包骨架
+- `@mingxu/coding-tools` 独立官方编码插件骨架
+- `@mingxu/web-search` 独立联网搜索插件骨架
+- CLI 的 `extensions` 命令树
+- Windows `mingxu.cmd` 的真实安装与启动说明
 
-- 统一运行链
-- TTY 聊天和流式输出
-- 会话恢复和 `--continue`
-- 审批 overlay
-- context / extensions / agents 面板
-- Instruction / Memory / Resource / MCP / Skill / Preset / Subagent 的本地 MVP 边界
-- 默认零内建工具
+还没完成的部分有：
 
-还没有完全补完的部分：
-
-- 本地插件安装器和完整扩展中心闭环
 - 插件市场
-- 自动安装插件
 - 远程 registry
-- OS / 容器级沙箱
-- 分布式 Subagent
-- 像完整 IDE 一样的全屏工作台
+- 自动安装
+- 第三方生态 adapter 的完整接入
+- 更完整的搜索后端和官方编码工具执行器
 
-本地插件和 provider 模块仍然属于可信代码；MingXu 提供的是治理链，不是沙箱隔离。
+MingXu 提供的是治理层，不是沙箱。
+本地插件和 provider 模块仍然属于可信代码，真正的能力边界要靠 manifest、权限、policy、approval 和 audit 共同约束。
 
 ## 开发与验证
 

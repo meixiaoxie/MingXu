@@ -16,7 +16,7 @@ import { createLoadResourceTool } from "../tools/builtin/load-resource-tool.js";
 import { createSpawnSubagentTool } from "../tools/builtin/spawn-subagent-tool.js";
 import { ToolRegistry } from "../tools/tool-registry.js";
 import { parseArgs } from "./parse-args.js";
-import { discoverCliConfig, getGlobalConfigPath, getProjectConfigPath, setProjectTrust } from "./config-discovery.js";
+import { discoverCliConfig, getGlobalConfigPath, getProjectConfigPath, getUserConfigDir, setProjectTrust } from "./config-discovery.js";
 import { JsonlAuditWriter } from "../audit/jsonl-audit-writer.js";
 import type { EventSink } from "../events/event-sink.js";
 import { NoopEventSink } from "../events/event-sink.js";
@@ -39,6 +39,7 @@ import { SubagentManager, filterPresetTools } from "../subagents/subagent-manage
 import { assertSafeLocalPath } from "../safety/path-safety.js";
 import type { InstructionLoaderOptions, InstructionRootConfig } from "../instructions/instruction-loader.js";
 import type { AgentLoopResult } from "../core/types.js";
+import { ExtensionManager } from "../extensions/extension-manager.js";
 import { MINGXU_IDENTITY_PROMPT } from "./identity.js";
 import { ChatInputController } from "./chat-input.js";
 import { findChatCommand, formatChatHelp, suggestChatCommands } from "./chat-commands.js";
@@ -62,7 +63,7 @@ export interface CliDependencies {
   debugProvider?: boolean;
 }
 
-const HELP_TEXT = `Usage: mingxu [options] [prompt]\n\nCommands:\n  init                    Create a starter config\n  chat [prompt]           Enter interactive chat mode\n  doctor                  Check config, env, plugins, session, and audit wiring\n  resume [sessionId]      Resume a saved session and continue with a new prompt\n  sessions                List recent sessions\n\nOptions:\n  -c, --config <path>     JSON configuration file\n  -p, --prompt <text>     Prompt to send to the agent\n  -m, --model <name>      Named model from config.models\n      --continue          Resume the latest session in the current workspace\n      --global            Write init output to the global config location\n      --project           Write init output to the project config location\n      --no-global-config  Ignore the global config layer\n      --trust-project     Trust the detected project config layer\n      --no-trust-project  Ignore the detected project config layer\n      --profile <name>    Init profile: minimal or secure-local\n      --online            Allow doctor to perform a live provider connectivity probe\n      --debug-provider    Print resolved provider config and request diagnostics to stderr\n  -h, --help              Show this help\n  -v, --version           Show the version\n`;
+const HELP_TEXT = `Usage: mingxu [options] [prompt]\n\nCommands:\n  init                    Create a starter config\n  chat [prompt]           Enter interactive chat mode\n  doctor                  Check config, env, plugins, session, and audit wiring\n  resume [sessionId]      Resume a saved session and continue with a new prompt\n  sessions                List recent sessions\n  extensions [action]     Inspect and manage installed extensions\n\nOptions:\n  -c, --config <path>     JSON configuration file\n  -p, --prompt <text>     Prompt to send to the agent\n  -m, --model <name>      Named model from config.models\n      --continue          Resume the latest session in the current workspace\n      --yes               Skip confirmation for extension install/update\n      --scope <scope>     Target extension scope: user or project\n      --global            Write init output to the global config location\n      --project           Write init output to the project config location\n      --no-global-config  Ignore the global config layer\n      --trust-project     Trust the detected project config layer\n      --no-trust-project  Ignore the detected project config layer\n      --profile <name>    Init profile: minimal or secure-local\n      --online            Allow doctor to perform a live provider connectivity probe\n      --debug-provider    Print resolved provider config and request diagnostics to stderr\n  -h, --help              Show this help\n  -v, --version           Show the version\n`;
 
 type MutableInstructionLoaderOptions = {
   systemPrompt?: string;
@@ -105,6 +106,16 @@ export async function main(
       stdout.write(`${result}\n`);
       return 0;
     }
+    if (args.command === "extensions" && args.commandTarget === "init") {
+      const targetDir = args.commandArgs?.[0] ?? args.prompt ?? resolve(process.cwd(), "sample-extension");
+      const manager = new ExtensionManager({
+        userRoot: getUserConfigDir(),
+        projectRoot: resolve(process.cwd(), ".mingxu"),
+      });
+      const result = await manager.initSkeleton(targetDir, args.commandArgs?.[1] ?? "sample-extension");
+      stdout.write(`${result}\n`);
+      return 0;
+    }
 
     const configDiscovery = args.configProvided
       ? {
@@ -138,6 +149,7 @@ export async function main(
       configFilePath,
       stderr,
       args.debugProvider ?? dependencies.debugProvider ?? false,
+      configDiscovery.projectTrusted,
     );
     const listSessions = dependencies.listSessions ?? createSessionLister(configFilePath);
 
@@ -157,6 +169,17 @@ export async function main(
       });
       stdout.write(`${result.output}\n`);
       return result.ok ? 0 : 1;
+    }
+
+    if (args.command === "extensions") {
+      const result = await handleExtensionsCommand({
+        args,
+        config,
+        configFilePath,
+        projectTrusted: configDiscovery.projectTrusted,
+      });
+      stdout.write(`${result.output}\n`);
+      return result.exitCode;
     }
 
     const interactiveTerminal = isTTYStream(stdin) && isTTYStream(stdout);
@@ -396,6 +419,7 @@ function createDefaultRunner(
   configFilePath: string,
   stderr: Pick<NodeJS.WriteStream, "write"> = process.stderr,
   debugProvider = false,
+  projectTrusted = false,
 ): NonNullable<CliDependencies["run"]> {
   return async (config, prompt, modelKey, sessionId) => {
     const providerDebug = createProviderDebugLogger({
@@ -483,6 +507,13 @@ function createDefaultRunner(
           ...(plugin.manifest !== undefined ? { manifest: plugin.manifest } : {}),
         });
       }
+
+      const extensionManager = new ExtensionManager({
+        userRoot: getUserConfigDir(),
+        projectRoot: resolve(dirname(resolve(configFilePath)), ".mingxu"),
+        projectTrusted,
+      });
+      await extensionManager.loadEnabledExtensions(pluginLoader, projectTrusted ? undefined : "user");
 
       const { selection, adapter } = providerRegistry.createFromConfig(config, modelKey, {
         debug: providerDebug,
@@ -627,6 +658,36 @@ async function createCliRuntimeContext(options: {
   }
   await mcpManager.connectAll();
 
+  const pluginLoader = new PluginLoader({
+    registerTool: (tool) => {
+      toolRegistry.register(tool);
+    },
+    unregisterTool: (name) => toolRegistry.unregister(name),
+    eventSink,
+  });
+  for (const plugin of options.config.plugins) {
+    const pluginSource = await resolvePluginLoadRequest({
+      path: plugin.path,
+      trust: plugin.trust,
+      configFilePath: options.configFilePath,
+    });
+    reportPluginLoad(options.stderr, plugin, pluginSource.resolvedPath);
+    await pluginLoader.load({
+      path: plugin.path,
+      trust: plugin.trust,
+      configFilePath: options.configFilePath,
+      ...(plugin.kind !== undefined ? { kind: plugin.kind } : {}),
+      ...(plugin.manifest !== undefined ? { manifest: plugin.manifest } : {}),
+    });
+  }
+
+  const extensionManager = new ExtensionManager({
+    userRoot: getUserConfigDir(),
+    projectRoot: resolve(configDir, ".mingxu"),
+    projectTrusted: options.projectTrusted ?? false,
+  });
+  await extensionManager.loadEnabledExtensions(pluginLoader, options.projectTrusted ? undefined : "user");
+
   const selectedDefaultPreset = options.config.defaultPreset !== undefined
     ? presetRegistry.get(options.config.defaultPreset)
     : undefined;
@@ -750,6 +811,7 @@ async function createCliRuntimeContext(options: {
       resources: resourceRegistry.list(),
       skills: skillRegistry.list(),
       presets: presetRegistry.list(),
+      extensions: await extensionManager.list(),
       mcpServers: mcpManager.listServers().map((name) => ({
         name,
         transport: options.config.mcpServers?.[name]?.transport ?? "stdio",
@@ -1403,6 +1465,146 @@ function reportPluginLoad(
   stderr.write(
     `[plugin] Loading ${plugin.path} -> ${resolvedPath} (trust: ${plugin.trust}). Loading a plugin executes third-party code; only load local code you have reviewed and trust.\n`,
   );
+}
+
+interface ExtensionCommandResult {
+  readonly output: string;
+  readonly exitCode: number;
+}
+
+async function handleExtensionsCommand(options: {
+  readonly args: import("./parse-args.js").CliArguments;
+  readonly config: ResolvedAgentConfig;
+  readonly configFilePath: string;
+  readonly projectTrusted: boolean;
+}): Promise<ExtensionCommandResult> {
+  const command = options.args.commandTarget ?? "list";
+  const manager = new ExtensionManager({
+    userRoot: getUserConfigDir(),
+    projectRoot: resolve(dirname(resolve(options.configFilePath)), ".mingxu"),
+    projectTrusted: options.projectTrusted,
+  });
+  const scope = options.args.scope ?? "user";
+  const isInteractive = process.stdin.isTTY && process.stdout.isTTY;
+
+  switch (command) {
+    case "list": {
+      const records = await manager.list();
+      if (records.length === 0) {
+        return { output: "No extensions are installed.", exitCode: 0 };
+      }
+      return {
+        output: records.map((record) => [
+          `${record.id}\t${record.version}\t${record.scope}\t${record.enabled ? "enabled" : "disabled"}`,
+          `adapter: ${record.adapterId}`,
+          `source: ${record.source.kind}:${record.source.locator}`,
+          `entry: ${record.entryPath}`,
+          `health: ${record.health}`,
+        ].join("\n")).join("\n\n"),
+        exitCode: 0,
+      };
+    }
+    case "inspect": {
+      const source = options.args.commandArgs?.[0];
+      if (!source) {
+        throw new Error("extensions inspect requires a source path, tarball, npm spec, or git URL");
+      }
+      const result = await manager.inspect(source);
+      return {
+        output: [
+          `id: ${result.manifest.id}`,
+          `name: ${result.manifest.name}`,
+          `version: ${result.manifest.version}`,
+          `kind: ${result.manifest.kind}`,
+          `entry: ${result.entryPath}`,
+          `manifestHash: ${result.manifestHash}`,
+          `sha256: ${result.sha256}`,
+          `source: ${result.source.kind}:${result.source.locator}`,
+          `contributions: ${result.manifest.contributions?.length ?? 0}`,
+        ].join("\n"),
+        exitCode: 0,
+      };
+    }
+    case "add":
+    case "update": {
+      const source = options.args.commandArgs?.[0];
+      if (!source) {
+        throw new Error(`extensions ${command} requires a source path, tarball, npm spec, or git URL`);
+      }
+      if (!isInteractive && !options.args.yes) {
+        throw new Error("Non-interactive extension installation requires --yes");
+      }
+      if (isInteractive && !options.args.yes) {
+        const confirmed = await confirmExtensionInstall(source, scope);
+        if (!confirmed) {
+          return { output: "Cancelled.", exitCode: 1 };
+        }
+      }
+      const result = await manager.install({ source, scope, yes: true });
+      return {
+        output: [
+          `Installed ${result.record.id}`,
+          `scope: ${result.record.scope}`,
+          `enabled: ${result.record.enabled}`,
+          `adapter: ${result.record.adapterId}`,
+          `source: ${result.record.source.kind}:${result.record.source.locator}`,
+        ].join("\n"),
+        exitCode: 0,
+      };
+    }
+    case "enable":
+    case "disable":
+    case "remove": {
+      const id = options.args.commandArgs?.[0];
+      if (!id) {
+        throw new Error(`extensions ${command} requires an extension id`);
+      }
+      const resolvedScope = await resolveExtensionScope(manager, id, scope);
+      if (!resolvedScope) {
+        throw new Error(`Extension not found: ${id}`);
+      }
+      if (command === "enable") {
+        await manager.enable(id, resolvedScope);
+      } else if (command === "disable") {
+        await manager.disable(id, resolvedScope);
+      } else {
+        await manager.remove(id, resolvedScope);
+      }
+      return {
+        output: `${command}d ${id} in ${resolvedScope} scope.`,
+        exitCode: 0,
+      };
+    }
+    case "doctor":
+      return {
+        output: await manager.doctor(),
+        exitCode: 0,
+      };
+    default:
+      throw new Error(`Unknown extensions command: ${command}`);
+  }
+}
+
+async function resolveExtensionScope(
+  manager: ExtensionManager,
+  id: string,
+  preferredScope: "user" | "project",
+): Promise<"user" | "project" | undefined> {
+  const preferred = (await manager.listInstalledRecords(preferredScope)).find((record) => record.id === id);
+  if (preferred) return preferredScope;
+  const fallbackScope = preferredScope === "user" ? "project" : "user";
+  const fallback = (await manager.listInstalledRecords(fallbackScope)).find((record) => record.id === id);
+  return fallback ? fallbackScope : undefined;
+}
+
+async function confirmExtensionInstall(source: string, scope: "user" | "project"): Promise<boolean> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = (await rl.question(`Install ${source} into ${scope} scope? [y/N] `)).trim().toLowerCase();
+    return answer === "y" || answer === "yes";
+  } finally {
+    rl.close();
+  }
 }
 
 async function initializeConfig(configPath: string, profile: InitProfile): Promise<string> {
