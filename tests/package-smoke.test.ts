@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat, writeFile, mkdir, access, readdir, rename, symlink } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile, mkdir, access, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawn } from "node:child_process";
@@ -96,48 +96,40 @@ function resolvePnpmCommand(): { readonly command: string; readonly args: readon
 }
 
 async function installPackedCliTarball(tarballPath: string, installRoot: string): Promise<void> {
-  const unpackRoot = await mkdtemp(join(tmpdir(), "mingxu-package-unpack-"));
-  const nodeModulesRoot = join(installRoot, "node_modules");
-  const packageParentRoot = join(nodeModulesRoot, "@mingxu");
-  const packageRoot = join(packageParentRoot, "cli");
-  const binRoot = join(installRoot, "node_modules", ".bin");
-  const sourceNodeModules = join(projectRoot, "node_modules");
-  const extractResult = await runCommand("tar", ["-xzf", tarballPath, "-C", unpackRoot], projectRoot);
-  expect(extractResult.exitCode, extractResult.stderr).toBe(0);
-
-  await mkdir(packageParentRoot, { recursive: true });
-  await mkdir(nodeModulesRoot, { recursive: true });
-  await mkdir(binRoot, { recursive: true });
-  await mirrorNodeModules(sourceNodeModules, nodeModulesRoot);
-  await rename(join(unpackRoot, "package"), packageRoot);
-
-  if (process.platform === "win32") {
-    const cmdPath = join(binRoot, "mingxu.cmd");
-    await writeFile(
-      cmdPath,
-      [
-        "@echo off",
-        "setlocal",
-        `set "_node=${process.execPath}"`,
-        "\"%_node%\" \"%~dp0..\\@mingxu\\cli\\dist\\entry.js\" %*",
-        "",
-      ].join("\r\n"),
-      "utf8",
-    );
-  } else {
-    await symlink(join("..", "@mingxu", "cli", "dist", "entry.js"), join(binRoot, "mingxu"));
-  }
+  const npmCliPath = join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
+  const installed = await runNode([
+    npmCliPath,
+    "install",
+    "--global",
+    "--prefix",
+    installRoot,
+    "--ignore-scripts",
+    "--no-audit",
+    "--no-fund",
+    tarballPath,
+  ], installRoot);
+  expect(installed.exitCode, installed.stderr).toBe(0);
 }
 
-async function mirrorNodeModules(sourceRoot: string, targetRoot: string): Promise<void> {
-  for (const entry of await readdir(sourceRoot, { withFileTypes: true })) {
-    if (entry.name.startsWith(".") || entry.name === "@mingxu") {
-      continue;
-    }
-    const sourcePath = join(sourceRoot, entry.name);
-    const targetPath = join(targetRoot, entry.name);
-    await symlink(sourcePath, targetPath, process.platform === "win32" ? "junction" : undefined);
-  }
+function installedPackageRoot(): string {
+  return process.platform === "win32"
+    ? join(installDirectory, "node_modules", "@mingxu", "cli")
+    : join(installDirectory, "lib", "node_modules", "@mingxu", "cli");
+}
+
+function installedBinPath(): string {
+  return process.platform === "win32"
+    ? join(installDirectory, "mingxu.cmd")
+    : join(installDirectory, "bin", "mingxu");
+}
+
+function runInstalledCli(args: readonly string[], cwd = installDirectory): Promise<CommandResult> {
+  const binPath = installedBinPath();
+  return runCommand(
+    process.platform === "win32" ? process.env.ComSpec ?? "cmd.exe" : binPath,
+    process.platform === "win32" ? ["/d", "/s", "/c", binPath, ...args] : args,
+    cwd,
+  );
 }
 
 beforeAll(async () => {
@@ -155,7 +147,7 @@ beforeAll(async () => {
   const packDirectory = join(installDirectory, "packed");
   await mkdir(packDirectory);
 
-  // Create a real tarball, then install it into an empty project. This catches
+  // Create a real tarball, then globally install it under an isolated prefix. This catches
   // missing files, broken package metadata, and unusable executable links.
   const packPnpmCommand = resolvePnpmCommand();
   const packed = await runCommand(
@@ -184,43 +176,36 @@ afterAll(async () => {
 
 describe("packed CLI and public API smoke path", () => {
   it("installs a CLI bin that prints help and version", async () => {
-    const entryPath = join(installDirectory, "node_modules", "@mingxu", "cli", "dist", "entry.js");
-    const packageJsonPath = join(installDirectory, "node_modules", "@mingxu", "cli", "package.json");
+    const entryPath = join(installedPackageRoot(), "dist", "entry.js");
+    const packageJsonPath = join(installedPackageRoot(), "package.json");
     const entrySource = await readFile(entryPath, "utf8");
     const installedPackage = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
       readonly bin?: Record<string, string>;
       readonly files?: string[];
       readonly dependencies?: Record<string, string>;
+      readonly private?: boolean;
     };
     const entryStats = await stat(entryPath);
 
     // npm must create a platform-specific command link, while the target needs
     // a Unix shebang. Running the target with Node avoids shell differences.
-    const binName = process.platform === "win32" ? "mingxu.cmd" : "mingxu";
-    const binPath = join(installDirectory, "node_modules", ".bin", binName);
+    const binPath = installedBinPath();
     expect((await stat(binPath)).isFile()).toBe(true);
     expect(entrySource.startsWith("#!/usr/bin/env node")).toBe(true);
     expect(entryStats.isFile()).toBe(true);
     expect(installedPackage.bin).toMatchObject({ mingxu: "./dist/entry.js" });
     expect(installedPackage.files).toEqual(["dist"]);
     expect(installedPackage.dependencies ?? {}).not.toHaveProperty("@mingxu/tui");
+    expect(installedPackage.private).not.toBe(true);
 
-    const helpResult = await runCommand(
-      process.platform === "win32" ? process.env.ComSpec ?? "cmd.exe" : binPath,
-      process.platform === "win32" ? ["/d", "/s", "/c", binPath, "--help"] : ["--help"],
-      installDirectory,
-    );
+    const helpResult = await runInstalledCli(["--help"]);
     expect(helpResult.exitCode, helpResult.stderr).toBe(0);
     expect(helpResult.stdout).toContain("Usage: mingxu");
     expect(helpResult.stdout).toContain("--model <name>");
     expect(helpResult.stdout).toContain("--force");
     expect(helpResult.stderr).toBe("");
 
-    const versionResult = await runCommand(
-      process.platform === "win32" ? process.env.ComSpec ?? "cmd.exe" : binPath,
-      process.platform === "win32" ? ["/d", "/s", "/c", binPath, "--version"] : ["--version"],
-      installDirectory,
-    );
+    const versionResult = await runInstalledCli(["--version"]);
     expect(versionResult.exitCode, versionResult.stderr).toBe(0);
     expect(versionResult.stdout.trim()).toBe("0.4.0");
   }, 20_000);
@@ -287,13 +272,7 @@ describe("packed CLI and public API smoke path", () => {
 
     await mkdir(fixtureRoot, { recursive: true });
 
-    const initResult = await runCommand(
-      process.platform === "win32" ? process.env.ComSpec ?? "cmd.exe" : join(installDirectory, "node_modules", ".bin", "mingxu"),
-      process.platform === "win32"
-        ? ["/d", "/s", "/c", join(installDirectory, "node_modules", ".bin", "mingxu.cmd"), "init", "--config", configPath, "--profile", "secure-local"]
-        : ["init", "--config", configPath, "--profile", "secure-local"],
-      installDirectory,
-    );
+    const initResult = await runInstalledCli(["init", "--config", configPath, "--profile", "secure-local"]);
     expect(initResult.exitCode, initResult.stderr).toBe(0);
     expect(await readFile(configPath, "utf8")).toContain('"defaultModel": "primary"');
 
@@ -301,13 +280,7 @@ describe("packed CLI and public API smoke path", () => {
     await mkdir(sessionDirectory, { recursive: true });
     await writeFile(join(sessionDirectory, "session-keep.jsonl"), "{\"sessionId\":\"session-keep\"}\n", "utf8");
 
-    const forceResult = await runCommand(
-      process.platform === "win32" ? process.env.ComSpec ?? "cmd.exe" : join(installDirectory, "node_modules", ".bin", "mingxu"),
-      process.platform === "win32"
-        ? ["/d", "/s", "/c", join(installDirectory, "node_modules", ".bin", "mingxu.cmd"), "init", "--config", configPath, "--profile", "minimal", "--force"]
-        : ["init", "--config", configPath, "--profile", "minimal", "--force"],
-      installDirectory,
-    );
+    const forceResult = await runInstalledCli(["init", "--config", configPath, "--profile", "minimal", "--force"]);
     expect(forceResult.exitCode, forceResult.stderr).toBe(0);
     const rootEntries = await readdir(fixtureRoot);
     const backupName = rootEntries.find((name) => name.startsWith("mingxu.config.json.bak-"));
@@ -318,23 +291,11 @@ describe("packed CLI and public API smoke path", () => {
     await writeFile(configPath, JSON.stringify(runConfig, null, 2), "utf8");
     await writeFile(providerModulePath, providerModuleSource, "utf8");
 
-    const runResult = await runCommand(
-      process.platform === "win32" ? process.env.ComSpec ?? "cmd.exe" : join(installDirectory, "node_modules", ".bin", "mingxu"),
-      process.platform === "win32"
-        ? ["/d", "/s", "/c", join(installDirectory, "node_modules", ".bin", "mingxu.cmd"), "--config", configPath, "Say hello"]
-        : ["--config", configPath, "Say hello"],
-      installDirectory,
-    );
+    const runResult = await runInstalledCli(["--config", configPath, "Say hello"]);
     expect(runResult.exitCode, runResult.stderr).toBe(0);
     expect(runResult.stdout.trim()).toBe("final:Say hello");
 
-    const doctorResult = await runCommand(
-      process.platform === "win32" ? process.env.ComSpec ?? "cmd.exe" : join(installDirectory, "node_modules", ".bin", "mingxu"),
-      process.platform === "win32"
-        ? ["/d", "/s", "/c", join(installDirectory, "node_modules", ".bin", "mingxu.cmd"), "doctor", "--config", configPath]
-        : ["doctor", "--config", configPath],
-      installDirectory,
-    );
+    const doctorResult = await runInstalledCli(["doctor", "--config", configPath]);
     expect(doctorResult.exitCode, doctorResult.stdout).toBe(0);
     expect(doctorResult.stdout).toContain("PASS config");
     expect(doctorResult.stdout).toContain("PASS plugin");
@@ -345,13 +306,7 @@ describe("packed CLI and public API smoke path", () => {
     const sessionFilename = sessionFiles.find((name) => name.endsWith(".jsonl"));
     expect(sessionFilename).toBeDefined();
     const sessionId = sessionFilename!.slice(0, -".jsonl".length);
-    const resumeResult = await runCommand(
-      process.platform === "win32" ? process.env.ComSpec ?? "cmd.exe" : join(installDirectory, "node_modules", ".bin", "mingxu"),
-      process.platform === "win32"
-        ? ["/d", "/s", "/c", join(installDirectory, "node_modules", ".bin", "mingxu.cmd"), "--config", configPath, "resume", sessionId, "--prompt", "Continue work"]
-        : ["--config", configPath, "resume", sessionId, "--prompt", "Continue work"],
-      installDirectory,
-    );
+    const resumeResult = await runInstalledCli(["--config", configPath, "resume", sessionId, "--prompt", "Continue work"]);
     expect(resumeResult.exitCode, resumeResult.stderr).toBe(0);
     expect(resumeResult.stdout.trim()).toBe("final:Say hello|Continue work");
 

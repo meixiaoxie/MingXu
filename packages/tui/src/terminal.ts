@@ -3,6 +3,9 @@ import { emitKeypressEvents } from "node:readline";
 import { CURSOR_MARKER } from "./types.js";
 import { visibleWidth } from "./strings.js";
 
+const BRACKETED_PASTE_START = "\x1b[200~";
+const BRACKETED_PASTE_END = "\x1b[201~";
+
 export interface TerminalSize {
   readonly columns: number;
   readonly rows: number;
@@ -21,6 +24,8 @@ export class ProcessTerminal {
   #lastWidth = 0;
   #hasRendered = false;
   #rawMode = false;
+  #bracketedPaste = false;
+  #pasteBuffer: string | undefined;
   #keypressHandler: ((sequence: string, key: import("node:readline").Key) => void) | undefined;
   #resizeHandler: (() => void) | undefined;
 
@@ -59,14 +64,26 @@ export class ProcessTerminal {
     this.#input.setRawMode?.(true);
     this.#rawMode = true;
     this.#keypressHandler = (sequence, key) => {
+      if (sequence === BRACKETED_PASTE_START) {
+        this.#pasteBuffer = "";
+        return;
+      }
+      if (this.#pasteBuffer !== undefined) {
+        if (sequence === BRACKETED_PASTE_END) {
+          const pasted = this.#pasteBuffer;
+          this.#pasteBuffer = undefined;
+          this.#emitKeypress({ sequence: pasted, name: "paste" });
+          return;
+        }
+        this.#pasteBuffer += sequence;
+        return;
+      }
       const input: { sequence: string; name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean } = { sequence };
       if (key.name !== undefined) input.name = key.name;
       if (key.ctrl !== undefined) input.ctrl = key.ctrl;
       if (key.meta !== undefined) input.meta = key.meta;
       if (key.shift !== undefined) input.shift = key.shift;
-      for (const listener of this.#keyListeners) {
-        listener(input);
-      }
+      this.#emitKeypress(input);
     };
     this.#input.on("keypress", this.#keypressHandler);
     this.#resizeHandler = () => {
@@ -75,10 +92,12 @@ export class ProcessTerminal {
       }
     };
     this.#output.on("resize", this.#resizeHandler);
+    this.#output.write("\x1b[?2004h");
+    this.#bracketedPaste = true;
   }
 
   restore(): void {
-    if (!this.#rawMode) {
+    if (!this.#rawMode && !this.#bracketedPaste) {
       return;
     }
     if (this.#keypressHandler) {
@@ -89,8 +108,15 @@ export class ProcessTerminal {
       this.#output.off("resize", this.#resizeHandler);
       this.#resizeHandler = undefined;
     }
-    this.#input.setRawMode?.(false);
+    if (this.#rawMode) {
+      this.#input.setRawMode?.(false);
+    }
     this.#rawMode = false;
+    this.#pasteBuffer = undefined;
+    if (this.#bracketedPaste) {
+      this.#output.write("\x1b[?2004l");
+      this.#bracketedPaste = false;
+    }
     this.showCursor();
   }
 
@@ -127,40 +153,39 @@ export class ProcessTerminal {
     const cursorPosition = extractCursorPosition(rendered);
     const width = this.size.columns;
     const forceFull = options.full === true || !this.#hasRendered || this.#lastWidth !== width;
-
-    this.#output.write("\x1b[?2026h");
-    this.hideCursor();
+    const frame: string[] = ["\x1b[?2026h", "\x1b[?25l"];
+    const moveCursor = (row: number, column: number): void => {
+      frame.push(`\x1b[${Math.max(0, row + 1)};${Math.max(0, column + 1)}H`);
+    };
 
     if (forceFull) {
-      this.#output.write("\x1b[2J\x1b[H");
-      this.#output.write(rendered.join("\r\n"));
+      frame.push("\x1b[2J\x1b[H", rendered.join("\r\n"));
     } else {
       const prefix = commonPrefix(this.#lastFrame, rendered);
       const suffix = commonSuffix(this.#lastFrame, rendered, prefix);
       if (prefix === 0 && rendered.length === 0) {
-        this.#output.write("\x1b[H\x1b[2J");
+        frame.push("\x1b[H\x1b[2J");
       } else if (rendered.length !== this.#lastFrame.length || prefix !== rendered.length) {
-        this.moveCursorTo(prefix, 0);
+        moveCursor(prefix, 0);
         for (let row = prefix; row < rendered.length - suffix; row += 1) {
           if (row > prefix) {
-            this.#output.write("\r\n");
+            frame.push("\r\n");
           }
-          this.clearLine();
-          this.#output.write(rendered[row] ?? "");
+          frame.push("\x1b[2K\r", rendered[row] ?? "");
         }
         if (rendered.length < this.#lastFrame.length) {
-          this.#output.write("\x1b[0J");
+          frame.push("\x1b[0J");
         }
       }
     }
 
     if (cursorPosition) {
-      this.moveCursorTo(cursorPosition.row, cursorPosition.column);
+      moveCursor(cursorPosition.row, cursorPosition.column);
     } else if (rendered.length > 0) {
-      this.moveCursorTo(Math.max(0, rendered.length - 1), visibleWidth(rendered.at(-1) ?? ""));
+      moveCursor(Math.max(0, rendered.length - 1), visibleWidth(rendered.at(-1) ?? ""));
     }
-    this.showCursor();
-    this.#output.write("\x1b[?2026l");
+    frame.push("\x1b[?25h", "\x1b[?2026l");
+    this.#output.write(frame.join(""));
     this.#lastFrame = rendered;
     this.#lastWidth = width;
     this.#hasRendered = true;
@@ -178,6 +203,12 @@ export class ProcessTerminal {
       return;
     }
     this.#output.write("\x1b[2K\r");
+  }
+
+  #emitKeypress(input: { sequence: string; name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean }): void {
+    for (const listener of this.#keyListeners) {
+      listener(input);
+    }
   }
 }
 

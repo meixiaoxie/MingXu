@@ -134,6 +134,11 @@ interface CursorPosition {
   readonly column: number;
 }
 
+interface EditorSnapshot {
+  readonly value: string;
+  readonly cursor: number;
+}
+
 export class Editor implements Component {
   readonly #prompt: string;
   readonly #placeholder: string;
@@ -150,6 +155,8 @@ export class Editor implements Component {
   #completionSuppressed = false;
   #renderWidth = 80;
   #layout: readonly CursorPosition[] = [];
+  #undoStack: EditorSnapshot[] = [];
+  #redoStack: EditorSnapshot[] = [];
 
   constructor(options: EditorOptions = {}) {
     this.#prompt = options.prompt ?? "> ";
@@ -173,6 +180,8 @@ export class Editor implements Component {
     this.#completionItems = [];
     this.#completionIndex = 0;
     this.#layout = [];
+    this.#undoStack = [];
+    this.#redoStack = [];
   }
 
   pushHistory(value: string): void {
@@ -188,6 +197,20 @@ export class Editor implements Component {
   handleInput(input: KeyInput): ComponentAction | void {
     if (input.ctrl && input.name === "c") {
       return { type: "cancel" };
+    }
+
+    if (input.ctrl && input.name === "z") {
+      if (input.shift) {
+        this.#redo();
+      } else {
+        this.#undo();
+      }
+      return { type: "none" };
+    }
+
+    if (input.ctrl && input.name === "y") {
+      this.#redo();
+      return { type: "none" };
     }
 
     if (input.name === "return" || input.name === "enter") {
@@ -315,6 +338,7 @@ export class Editor implements Component {
     if (!normalized) {
       return;
     }
+    this.#recordUndo();
     this.#completionSuppressed = false;
     const value = splitGraphemes(this.#value);
     const inserted = splitGraphemes(normalized);
@@ -330,6 +354,7 @@ export class Editor implements Component {
     if (this.#cursor === 0) {
       return;
     }
+    this.#recordUndo();
     this.#completionSuppressed = false;
     const value = splitGraphemes(this.#value);
     value.splice(this.#cursor - 1, 1);
@@ -345,6 +370,7 @@ export class Editor implements Component {
     if (this.#cursor >= value.length) {
       return;
     }
+    this.#recordUndo();
     this.#completionSuppressed = false;
     value.splice(this.#cursor, 1);
     this.#value = value.join("");
@@ -393,6 +419,7 @@ export class Editor implements Component {
     if (!prefix.join("").startsWith("/")) {
       return;
     }
+    this.#recordUndo();
     const suffix = value.slice(this.#cursor);
     const separator = suffix[0] === " " || suffix.length === 0 ? "" : " ";
     const replacement = splitGraphemes(`/${item.id}${separator}`);
@@ -402,6 +429,41 @@ export class Editor implements Component {
     this.#menuVisible = false;
     this.#completionItems = [];
     this.#completionIndex = 0;
+  }
+
+  #recordUndo(): void {
+    this.#undoStack.push({ value: this.#value, cursor: this.#cursor });
+    if (this.#undoStack.length > 100) {
+      this.#undoStack.shift();
+    }
+    this.#redoStack = [];
+  }
+
+  #undo(): void {
+    const snapshot = this.#undoStack.pop();
+    if (!snapshot) {
+      return;
+    }
+    this.#redoStack.push({ value: this.#value, cursor: this.#cursor });
+    this.#restoreSnapshot(snapshot);
+  }
+
+  #redo(): void {
+    const snapshot = this.#redoStack.pop();
+    if (!snapshot) {
+      return;
+    }
+    this.#undoStack.push({ value: this.#value, cursor: this.#cursor });
+    this.#restoreSnapshot(snapshot);
+  }
+
+  #restoreSnapshot(snapshot: EditorSnapshot): void {
+    this.#value = snapshot.value;
+    this.#cursor = snapshot.cursor;
+    this.#historyIndex = undefined;
+    this.#draftBeforeHistory = undefined;
+    this.#completionSuppressed = false;
+    this.#syncCompletionState();
   }
 
   #syncCompletionState(): void {

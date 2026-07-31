@@ -56,6 +56,19 @@ describe("Editor input behavior", () => {
     });
   });
 
+  it("undoes and redoes grapheme and multiline paste edits", () => {
+    const editor = new Editor({ prompt: "> " });
+
+    editor.handleInput({ sequence: "start", name: "paste" });
+    editor.handleInput({ sequence: "\n中文🙂", name: "paste" });
+    expect(editor.value).toBe("start\n中文🙂");
+
+    editor.handleInput({ sequence: "", name: "z", ctrl: true });
+    expect(editor.value).toBe("start");
+    editor.handleInput({ sequence: "", name: "y", ctrl: true });
+    expect(editor.value).toBe("start\n中文🙂");
+  });
+
   it("keeps slash completion scoped to the beginning of the input and closes cleanly", () => {
     const editor = new Editor({
       prompt: "> ",

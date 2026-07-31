@@ -52,5 +52,8 @@ jobs:
       - name: Dry-run package contents
         run: pnpm pack:dry-run
 
+      - name: Audit production dependencies
+        run: pnpm audit --prod
+
       - name: Publish package with provenance
         run: npm publish --provenance --access public

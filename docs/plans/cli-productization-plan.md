@@ -24,14 +24,15 @@ MingXu 仍然是通用 Agent 大脑：Core 负责推理、上下文、Session、
 
 ### 2.2 当前不足
 
-- `@mingxu/tui` 仍是初级自研行渲染器，尚未接入计划中的成熟差分渲染能力。
-- 首次渲染仍会清屏，Transcript 还没有真正固化到普通终端 scrollback。
-- Overlay 目前是 CLI 内部的单面板状态，不是真正的栈、焦点和 viewport 系统。
-- Editor 仍按字符串索引移动和删除，组合字符、emoji、视觉行和 IME 边界不完整。
-- Markdown、Diff、Table、Command 输出和主题系统仍是原型级实现。
-- CLI 产品适配、命令处理、运行事件和界面渲染仍集中在 `CliTuiApp`。
-- `coding-tools` 和 `web-search` 仍是协议骨架，不能作为完整扩展闭环的真实样例。
-- 测试主要依赖 fake terminal，尚未形成 xterm、Windows 和真实 tarball 的发布矩阵。
+- `@mingxu/tui` 已有逐行差分、同步输出和刷新合并，但仍是自研渲染器，尚未接入并固定计划中的成熟上游能力。
+- Transcript 尚未真正分成已提交的普通终端 scrollback 与可重绘活动区域，长历史仍会参与 ViewModel 渲染。
+- raw mode、光标和 bracketed paste 已对称恢复，但 SIGTERM、SIGHUP、未捕获异常和降级终端的恢复矩阵不完整。
+- Editor 已按 grapheme cluster 处理移动和删除，并支持多行、历史、粘贴和撤销/重做；选择区、IME composition 和跨终端输入边界仍不完整。
+- Overlay 栈和主要产品面板已经可用，但 Agent 节点/子树取消、复杂焦点恢复和窄终端交互仍需收口。
+- Markdown、Diff、Table、Tree 和 Progress 仍是基础实现，CommandBlock 尚未完成。
+- 事件幂等投影已经从 `CliTuiApp` 抽出，但 RuntimeAdapter、CommandController 和 ProductScreen 的职责拆分尚未完成。
+- `coding-tools` 已具备真实工具和扩展生命周期；write/edit 仍需改为写入前 Diff 预览、审批后提交的两阶段协议。`web-search` 仍是后续骨架。
+- xterm/headless 和真实 tarball 全局安装已经进入测试，三平台 CI 门禁已经配置；仍需等待三平台实际结果，并补齐并发工具、进程信号、无效字节和长会话指标。
 
 ### 2.3 当前成熟度判断
 
@@ -433,13 +434,39 @@ A 基线测试
 
 ## 13. 阶段状态
 
-- 阶段 A：已完成
-- 阶段 B：已完成
-- 阶段 C：已完成
-- 阶段 D：已完成
-- 阶段 E：已完成
-- 阶段 F：已完成
-- 阶段 G：已完成
-- 阶段 H：已完成
-- 阶段 I：已完成
+- 阶段 A：部分完成，自动化特征基线已建立，真实 Windows Terminal 和 PowerShell 输出样本尚未入库。
+- 阶段 B：部分完成，差分输出、同步输出和刷新合并已有实现；成熟上游渲染包装、真正的历史/活动区域分离及完整信号恢复矩阵尚未完成。
+- 阶段 C：部分完成，grapheme、多行、历史、bracketed paste 和撤销/重做已有覆盖；IME composition、选择区及跨终端 Shift+Enter 降级提示尚未完成。
+- 阶段 D：部分完成，语义块、主题和控制字符净化已有实现；Markdown、Diff、Table、Progress 仍为基础实现，CommandBlock 尚未完成。
+- 阶段 E：部分完成，Overlay 栈、统一命令注册表和主要浏览面板已有实现；Agent 节点/子树取消及更完整的焦点恢复验收尚未完成。
+- 阶段 F：部分完成，事件 ID、幂等投影和乱序缓冲已有实现；RuntimeAdapter、CommandController、ProductScreen 拆分及 PresentationBlock/session replay 投影尚未完成。
+- 阶段 G：部分完成，coding-tools 和扩展生命周期已有真实实现；写入前 Diff 预览、审批后提交以及 Audit 全链路验收尚未完成。
+- 阶段 H：部分完成，非 TTY、重定向、EPIPE、resume/continue、配置备份和真实 tarball 全局安装已有覆盖；System32 启动和三平台安装结果仍需 CI/实机确认。
+- 阶段 I：部分完成，xterm/headless、流式性能门槛、真实安装和三平台 CI 门禁已建立；并发工具、1,000 条历史、进程信号、插件异常、无效 Unicode/二进制输出及完整性能指标仍缺正式验收。
+
+阶段提交只表示对应实现批次已经落库，不等同于该阶段所有工作项已经通过发布验收。第 11 节完成定义保持未勾选，成品 CLI 尚未标记完成。
+
+## 14. 2026-07-31 全阶段复核
+
+本次复核修正了三类会造成验收误判的问题：
+
+- TUI 刷新现在按最高约 30 FPS 合并，退出时取消待执行重绘，性能测试按 100 ms 的 delta 可见性门槛执行。
+- raw mode 启停对称开启/关闭 bracketed paste，粘贴作为单次编辑交付，并补充撤销/重做特征测试。
+- 包烟测改为从真实 tarball 通过 npm 全局安装到隔离前缀；Windows、Linux、macOS CI 均执行安装烟测和 pack dry-run，发布门禁补充生产依赖审计。
+
+仍需后续实现的 P0 缺口：
+
+- 将 Transcript 固化为真正的普通终端 scrollback，完成消息只提交一次，活动区域不再持有和重排全部历史。
+- 引入并固定成熟差分渲染包装层，记录版本、许可证和本地修改；补齐 SIGTERM、SIGHUP、未捕获异常等终端恢复测试。
+- 完成 IME composition、选择区和输入法边界测试。
+- 完成 RuntimeAdapter、CommandController、ProductScreen 的职责拆分和 session replay 投影。
+- coding-tools 写操作改为预览/审批/提交两阶段协议，并验证 Policy、Approval、Audit 和 Session 摘要全链路。
+- 在三个平台的 CI 结果实际通过后，再确认跨平台真实安装验收；不能仅凭工作流配置宣称通过。
+
+仍需后续实现的 P1/P2 缺口：
+
+- 完整 Markdown、Diff、CommandBlock、Table、Tree 和 Progress 产品组件。
+- Agent Tree 的节点/子树取消，以及面板在复杂嵌套和 resize 下的焦点恢复。
+- Stage I 中多个并发工具、超长输出、1,000 条历史、恶意/无效字节输入和完整内存/重绘指标。
+- README、CHANGELOG、SECURITY 和 development roadmap 仍需按最终真实能力统一更新；当前文档仍混有 coding-tools 骨架期口径。
 

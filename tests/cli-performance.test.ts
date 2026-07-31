@@ -127,6 +127,7 @@ describe("CLI performance gates", () => {
       type: "message_start",
       message: createAssistantMessage("assistant-perf", ""),
     });
+    await virtual.flush();
 
     const batchLatencies: number[] = [];
     let content = "";
@@ -173,9 +174,7 @@ describe("CLI performance gates", () => {
     expect(virtual.screen.buffer.active.baseY).toBeGreaterThan(0);
     expect(renderFrameCount).toBeLessThanOrEqual(30);
     expect(clearCount).toBe(1);
-    expect(batchLatencies[0]).toBeLessThan(500);
-    const steadyStateLatencies = batchLatencies.slice(3);
-    expect(steadyStateLatencies.length).toBeGreaterThan(0);
-    expect(percentile(steadyStateLatencies, 0.95)).toBeLessThan(300);
+    expect(batchLatencies.length).toBe(20);
+    expect(percentile(batchLatencies, 0.95)).toBeLessThan(100);
   });
 });

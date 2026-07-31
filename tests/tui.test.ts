@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { EventEmitter } from "node:events";
+
+import { describe, expect, it, vi } from "vitest";
 
 import { Box, Editor, KeyValue, SelectList, Text, ProcessTerminal } from "@mingxu/tui";
 
@@ -65,5 +67,38 @@ describe("tui components", () => {
 
     expect(writes.join("")).toContain("\u001b[H");
     expect(writes.join("")).toContain("second frame");
+  });
+
+  it("groups bracketed paste and restores the terminal mode symmetrically", () => {
+    const writes: string[] = [];
+    const input = Object.assign(new EventEmitter(), {
+      isTTY: true,
+      resume() {},
+      setRawMode: vi.fn(),
+    }) as unknown as NodeJS.ReadStream;
+    const output = Object.assign(new EventEmitter(), {
+      isTTY: true,
+      columns: 80,
+      rows: 24,
+      write(chunk: string) {
+        writes.push(chunk);
+        return true;
+      },
+    }) as unknown as NodeJS.WriteStream;
+    const terminal = new ProcessTerminal(input, output);
+    const keys: Array<{ sequence: string; name?: string }> = [];
+    terminal.onKeypress((key) => keys.push(key));
+
+    terminal.enterRawMode();
+    input.emit("keypress", "\x1b[200~", { sequence: "\x1b[200~" });
+    input.emit("keypress", "line one\nline two", { sequence: "line one\nline two" });
+    input.emit("keypress", "\x1b[201~", { sequence: "\x1b[201~" });
+    terminal.restore();
+
+    expect(keys).toEqual([{ sequence: "line one\nline two", name: "paste" }]);
+    expect(writes.join("")).toContain("\x1b[?2004h");
+    expect(writes.join("")).toContain("\x1b[?2004l");
+    expect(input.setRawMode).toHaveBeenNthCalledWith(1, true);
+    expect(input.setRawMode).toHaveBeenNthCalledWith(2, false);
   });
 });

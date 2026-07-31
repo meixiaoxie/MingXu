@@ -51,9 +51,13 @@ jobs:
         run: pnpm build
 
   package-smoke:
-    name: Package smoke on Node 24 / Ubuntu
-    runs-on: ubuntu-latest
+    name: Package smoke on Node 24 / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     needs: quality
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
 
     steps:
       - name: Check out repository
@@ -80,3 +84,6 @@ jobs:
 
       - name: Smoke-test CLI and package
         run: pnpm test:smoke
+
+      - name: Dry-run package contents
+        run: pnpm pack:dry-run

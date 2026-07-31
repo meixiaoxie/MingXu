@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 
 import headless from "@xterm/headless";
 
-import { ProcessTerminal, type KeyInput } from "@mingxu/tui";
+import { DEFAULT_FRAME_INTERVAL_MS, ProcessTerminal, type KeyInput } from "@mingxu/tui";
 
 interface HeadlessBufferLine {
   translateToString(trimRight?: boolean): string;
@@ -80,7 +80,7 @@ export function createVirtualTerminal(options: {
   const terminal = new ProcessTerminal(input, output);
   const flush = async (): Promise<void> => {
     await pending;
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setTimeout(resolve, Math.ceil(DEFAULT_FRAME_INTERVAL_MS) + 5));
     await pending;
   };
   const readLines = async (): Promise<string[]> => {

@@ -8,6 +8,7 @@ const releaseWorkflowPath = new URL("../.github/workflows/release.yml", import.m
 describe("CI workflow policy", () => {
   it("keeps platform coverage explicit in the main matrix workflow", async () => {
     const workflow = await readFile(ciWorkflowPath, "utf8");
+    const packageSmoke = workflow.slice(workflow.indexOf("  package-smoke:"));
 
     expect(workflow).toContain("ubuntu-latest");
     expect(workflow).toContain("windows-latest");
@@ -17,6 +18,10 @@ describe("CI workflow policy", () => {
     expect(workflow).toContain("Build package");
     expect(workflow).not.toContain("continue-on-error");
     expect(workflow).not.toContain("if: false");
+    expect(packageSmoke).toContain("runs-on: ${{ matrix.os }}");
+    expect(packageSmoke).toContain("os: [ubuntu-latest, windows-latest, macos-latest]");
+    expect(packageSmoke).toContain("pnpm test:smoke");
+    expect(packageSmoke).toContain("pnpm pack:dry-run");
   });
 
   it("keeps the package smoke and pack dry-run checks in the release gate", async () => {
@@ -26,5 +31,6 @@ describe("CI workflow policy", () => {
     expect(workflow).toContain("Dry-run package contents");
     expect(workflow).toContain("pnpm test:smoke");
     expect(workflow).toContain("pnpm pack:dry-run");
+    expect(workflow).toContain("pnpm audit --prod");
   });
 });

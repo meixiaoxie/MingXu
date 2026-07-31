@@ -28,7 +28,6 @@ const dependencies = Object.fromEntries(
 const stagedPackage = {
   name: originalPackage.name,
   version: originalPackage.version,
-  private: originalPackage.private,
   type: originalPackage.type,
   description: originalPackage.description,
   bin: originalPackage.bin,

@@ -1093,6 +1093,7 @@ export class CliTuiApp {
       return;
     }
     this.#shutdownCompleted = true;
+    this.#host.dispose();
     this.#terminal.showCursor();
     this.#terminal.restore();
     this.#sessionSubscription?.();
