@@ -7,6 +7,7 @@ import type { SubagentCancelRequest, SubagentCancelResult, SubagentSnapshot } fr
 import type { ConfigLayerInfo } from "./config-discovery.js";
 import type { ApprovalHandler } from "../approval/types.js";
 import type { ExtensionDescriptor } from "../extensions/protocol.js";
+import type { SessionDocument, SessionExtensionSnapshot, SessionPresentationBlock } from "../session/types.js";
 
 export interface CliSessionRequest {
   readonly modelKey?: string;
@@ -60,6 +61,12 @@ export interface CliRuntimeContext {
   listSessions(): Promise<string>;
   listRecentSessions(limit?: number): Promise<readonly SessionSummary[]>;
   snapshot(): Promise<CliRuntimeSnapshot>;
+  loadSessionDocument?(sessionId: string): Promise<SessionDocument | undefined>;
+  saveSessionPresentation?(input: {
+    readonly sessionId: string;
+    readonly blocks: readonly SessionPresentationBlock[];
+    readonly extensionSnapshot?: SessionExtensionSnapshot;
+  }): Promise<void>;
   cancelSubagents?(request: SubagentCancelRequest): Promise<SubagentCancelResult> | SubagentCancelResult;
   close(): Promise<void>;
 }

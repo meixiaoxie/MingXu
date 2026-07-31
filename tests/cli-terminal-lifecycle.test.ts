@@ -151,15 +151,30 @@ describe("CLI terminal lifecycle", () => {
     },
   );
 
-  it.each(["provider", "plugin"])("restores after a %s failure", async (source) => {
+  it.each(["provider", "plugin"])("continues after a %s failure and restores on exit", async (source) => {
+    let attempts = 0;
     const session = createSession({
       prompt: async () => {
-        throw new Error(`${source} failed`);
+        attempts += 1;
+        if (attempts === 1) throw new Error(`${source} failed`);
+        return { content: "recovered", messages: [], iterations: 1, terminationReason: "completed" };
       },
     });
     const { app, processTarget, virtual } = createApp(session);
 
-    await expect(app.start("fail now")).resolves.toBe(1);
+    const running = app.start("fail now");
+    await vi.waitFor(() => {
+      expect(attempts).toBe(1);
+      expect(app.isRunning).toBe(false);
+    });
+    expect(processTarget.listenerCount("SIGINT")).toBe(1);
+    expect(processTarget.listenerCount("uncaughtException")).toBe(1);
+
+    await expect(app.runPrompt("try again")).resolves.toBeUndefined();
+    expect(attempts).toBe(2);
+    app.exit();
+
+    await expect(running).resolves.toBe(0);
     expectProcessListenersRemoved(processTarget);
     expect(virtual.writes.at(-1)).toBe("\x1b[?2026l\x1b[?2004l\x1b[?25h");
   });

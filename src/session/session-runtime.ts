@@ -262,6 +262,10 @@ export class SessionRuntime {
 
   private async ensureDocument(): Promise<SessionDocument> {
     if (this.#document) {
+      const latest = await this.#store.getSession(this.#document.session.sessionId);
+      if (latest && latest.revision > this.#document.revision) {
+        this.#document = latest;
+      }
       return this.#document;
     }
     const created = await this.#store.createSession({

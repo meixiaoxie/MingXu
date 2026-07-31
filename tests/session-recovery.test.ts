@@ -76,6 +76,51 @@ describe("session runtime recovery", () => {
     }
   });
 
+  it("continues after an external presentation snapshot advances the revision", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mingxu-session-runtime-presentation-"));
+    const store = new JsonlSessionStore(root);
+    const runtime = new SessionRuntime({ sessionStore: store, title: "presentation" });
+
+    try {
+      await runtime.load();
+      const sessionId = runtime.currentSessionId()!;
+      const document = await store.getRequiredSession(sessionId);
+      await store.saveSession({
+        ...document,
+        presentationBlocks: [{
+          id: "answer-1",
+          revision: 2,
+          kind: "assistant",
+          title: "MingXu",
+          state: "complete",
+          summary: "persisted answer",
+          lines: ["persisted answer"],
+        }],
+      }, document.revision);
+
+      const run: Run = {
+        runId: "run-after-presentation",
+        sessionId,
+        traceId: "trace-after-presentation",
+        state: "pending",
+        resolvedModel: "demo",
+        configHash: "config",
+        pluginNames: [],
+        policyVersion: "policy-v1",
+        schemaVersion: "session/v1",
+        startedAt: new Date().toISOString(),
+        turns: [],
+      };
+      await expect(runtime.beginRun(run, { role: "user", content: "continue" })).resolves.toBeUndefined();
+
+      const updated = await store.getRequiredSession(sessionId);
+      expect(updated.runs.at(-1)?.runId).toBe("run-after-presentation");
+      expect(updated.presentationBlocks?.[0]?.summary).toBe("persisted answer");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("bootstraps legacy session documents into JSONL", async () => {
     const root = await mkdtemp(join(tmpdir(), "mingxu-session-runtime-legacy-"));
     const legacyId = "legacy-session";

@@ -2,6 +2,8 @@ export type { SessionStore } from "./session-store.js";
 export type {
   SessionApprovalRecord,
   SessionDocument,
+  SessionExtensionSnapshot,
+  SessionPresentationBlock,
   SessionRecord,
   SessionRunRecord,
   SessionRuntimeSnapshot,

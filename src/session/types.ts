@@ -69,6 +69,28 @@ export interface SessionApprovalRecord {
   record: ApprovalRecord;
 }
 
+export interface SessionPresentationBlock {
+  readonly id: string;
+  readonly revision: number;
+  readonly kind: "user" | "assistant" | "tool" | "status" | "error" | "approval-result";
+  readonly title: string;
+  readonly state: "streaming" | "complete" | "error" | "collapsed";
+  readonly summary: string;
+  readonly lines: readonly string[];
+  readonly live?: boolean;
+  readonly source?: string;
+}
+
+export interface SessionExtensionSnapshot {
+  readonly capturedAt: string;
+  readonly extensions: readonly {
+    readonly id: string;
+    readonly version: string;
+    readonly enabled: boolean;
+    readonly health: string;
+  }[];
+}
+
 export interface SessionDocument {
   schemaVersion: string;
   revision: number;
@@ -76,6 +98,8 @@ export interface SessionDocument {
   session: SessionRecord;
   runs: SessionRunRecord[];
   approvals: SessionApprovalRecord[];
+  presentationBlocks?: SessionPresentationBlock[];
+  extensionSnapshot?: SessionExtensionSnapshot;
 }
 
 export interface SessionSummary {

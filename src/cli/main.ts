@@ -874,6 +874,17 @@ async function createCliRuntimeContext(options: {
         session: summarizeInstructionScope(options.config.instructions?.session),
       },
     }),
+    loadSessionDocument: async (sessionId) => sessionStore?.getSession(sessionId),
+    saveSessionPresentation: async (input) => {
+      if (!sessionStore) return;
+      const document = await sessionStore.getSession(input.sessionId);
+      if (!document) return;
+      await sessionStore.saveSession({
+        ...document,
+        presentationBlocks: [...input.blocks],
+        ...(input.extensionSnapshot !== undefined ? { extensionSnapshot: input.extensionSnapshot } : {}),
+      }, document.revision);
+    },
     cancelSubagents: (request) => subagentManager.cancel(request),
     close: async () => {
       await mcpManager.close();

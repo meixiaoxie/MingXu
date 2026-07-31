@@ -1,6 +1,7 @@
 import type { ApprovalPrompt, ApprovalResponse } from "../approval/types.js";
 import type { ToolResult } from "../core/messages.js";
 import type { AgentEvent } from "../events/types.js";
+import type { SessionPresentationBlock } from "../session/types.js";
 import {
   ConversationViewModel,
   type ConversationRenderOptions,
@@ -29,6 +30,7 @@ export class CliRuntimeProjection {
   #lastSequences = new Map<string, number>();
   #pendingMessageEvents = new Map<string, AgentEvent[]>();
   #pendingToolEvents = new Map<string, AgentEvent[]>();
+  readonly #diagnostics: string[] = [];
 
   clear(): void {
     this.conversation.clear();
@@ -39,6 +41,7 @@ export class CliRuntimeProjection {
     this.#lastSequences.clear();
     this.#pendingMessageEvents.clear();
     this.#pendingToolEvents.clear();
+    this.#diagnostics.length = 0;
   }
 
   setEmptyHint(lines: readonly string[]): void {
@@ -124,6 +127,32 @@ export class CliRuntimeProjection {
 
   get activeBlockCount(): number {
     return this.conversation.activeBlockCount;
+  }
+
+  get diagnostics(): readonly string[] {
+    return this.#diagnostics;
+  }
+
+  presentationBlocks(): SessionPresentationBlock[] {
+    return this.conversation.presentationBlocks();
+  }
+
+  applyPresentationBlock(block: SessionPresentationBlock): ProjectionResult {
+    const result = createProjectionResult();
+    const existing = this.getBlock(block.id);
+    if (existing?.kind !== undefined && existing.kind !== block.kind) {
+      this.#diagnostics.push(`Rejected presentation block ${block.id}: kind changed from ${existing.kind} to ${block.kind}.`);
+      return result;
+    }
+    if (existing && existing.revision >= block.revision) {
+      return result;
+    }
+    result.changed = this.conversation.applyPresentationBlock(block);
+    return result;
+  }
+
+  addDiagnostic(message: string): void {
+    this.#diagnostics.push(message);
   }
 
   getBlock(id: string) {
@@ -313,14 +342,10 @@ export class CliRuntimeProjection {
       ...(pendingMessages.length > 0 ? [`message events: ${pendingMessages.join(", ")}`] : []),
       ...(pendingTools.length > 0 ? [`tool events: ${pendingTools.join(", ")}`] : []),
     ];
-    this.conversation.addError("projection-diagnostics", "projection", [
-      "Dropped out-of-order events that never recovered.",
-      ...details,
-    ].join(" "));
+    this.#diagnostics.push(["Dropped out-of-order events that never recovered.", ...details].join(" "));
     this.#pendingMessageEvents.clear();
     this.#pendingToolEvents.clear();
     this.#pendingEventIds.clear();
-    result.changed = true;
     return result;
   }
 

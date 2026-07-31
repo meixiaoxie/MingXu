@@ -2,6 +2,7 @@ import { inspect } from "node:util";
 
 import type { ApprovalDecision, ApprovalPrompt, ApprovalResponse } from "../approval/types.js";
 import type { ToolCall, ToolResult } from "../core/messages.js";
+import type { SessionPresentationBlock } from "../session/types.js";
 import { redactText, redactValue } from "../redaction/redactor.js";
 import { sanitizeTerminalText, truncateToWidth, visibleWidth, wrapText } from "@mingxu/tui";
 import { styleTranscript, type TranscriptTheme, type TranscriptTone } from "./transcript-theme.js";
@@ -262,6 +263,45 @@ export class ConversationViewModel {
 
   get activeBlockCount(): number {
     return this.#blocks.length - this.#committedBlockCount;
+  }
+
+  applyPresentationBlock(block: SessionPresentationBlock): boolean {
+    const existing = this.#blockIndex.get(block.id);
+    if (existing && (existing.kind !== block.kind || existing.revision >= block.revision)) {
+      return false;
+    }
+    const normalized: ConversationBlock = {
+      id: sanitizeTerminalText(block.id),
+      kind: block.kind,
+      revision: block.revision,
+      title: sanitizeTerminalText(block.title),
+      state: block.state,
+      summary: sanitizeTerminalText(block.summary),
+      lines: block.lines.map((line) => sanitizeTerminalText(line)),
+      ...(block.live !== undefined ? { live: block.live } : {}),
+      ...(block.source !== undefined ? { source: sanitizeTerminalText(block.source) } : {}),
+    };
+    if (existing) {
+      Object.assign(existing, normalized);
+      return true;
+    }
+    this.#blocks.push(normalized);
+    this.#blockIndex.set(normalized.id, normalized);
+    return true;
+  }
+
+  presentationBlocks(): SessionPresentationBlock[] {
+    return this.#blocks.map((block) => ({
+      id: block.id,
+      revision: block.revision,
+      kind: block.kind,
+      title: block.title,
+      state: block.state,
+      summary: block.summary,
+      lines: [...block.lines],
+      ...(block.live !== undefined ? { live: block.live } : {}),
+      ...(block.source !== undefined ? { source: block.source } : {}),
+    }));
   }
 
   #upsertBlock(

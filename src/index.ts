@@ -119,6 +119,8 @@ export {
 export type {
   SessionApprovalRecord,
   SessionDocument,
+  SessionExtensionSnapshot,
+  SessionPresentationBlock,
   SessionRecord,
   SessionRunRecord,
   SessionRuntimeSnapshot,

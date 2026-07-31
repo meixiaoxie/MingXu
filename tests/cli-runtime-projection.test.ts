@@ -101,4 +101,28 @@ describe("CliRuntimeProjection", () => {
     expect(block?.summary).toBe("done");
     expect(block?.revision).toBeGreaterThanOrEqual(3);
   });
+
+  it("routes unrecoverable pending events to diagnostics without transcript errors", () => {
+    const projection = new CliRuntimeProjection();
+    projection.applyAgentEvent({
+      type: "message_update",
+      eventId: "orphan-update",
+      sequence: 2,
+      source: "core",
+      message: { id: "missing-message", role: "assistant", content: "must not render" },
+    } as AgentEvent);
+    projection.applyAgentEvent({
+      type: "agent_end",
+      eventId: "agent-end",
+      sequence: 3,
+      source: "core",
+      state: {},
+    } as AgentEvent);
+
+    expect(projection.blocks).toEqual([]);
+    expect(projection.diagnostics).toEqual([
+      "Dropped out-of-order events that never recovered. message events: missing-message",
+    ]);
+    expect(projection.render(80).join("\n")).not.toContain("must not render");
+  });
 });

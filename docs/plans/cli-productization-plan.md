@@ -26,7 +26,7 @@
 | R2 终端生命周期与异常恢复 | P0 | 所有退出和降级路径对称恢复终端 | 可与 R1 并行 | 已完成（2026-07-31） |
 | R3 IME、选择区与输入边界 | P0 | 完成真实中文输入法和选择编辑体验 | R1 的 viewport 协议 | 已完成（2026-07-31） |
 | R4 产品组件与复杂面板 | P1 | 完成 Markdown、Diff、CommandBlock 和面板交互 | R1、R3 | 已完成（2026-07-31） |
-| R5 CLI 职责拆分与 Session replay | P0 | 完成运行适配、命令、屏幕和回放边界 | 稳定事件投影 | 待完成 |
+| R5 CLI 职责拆分与 Session replay | P0 | 完成运行适配、命令、屏幕和回放边界 | 稳定事件投影 | 已完成（2026-07-31） |
 | R6 coding-tools 两阶段写入 | P0 | 写入前预览，审批后原子提交 | R4、R5 | 待完成 |
 | R7 发布级压力与跨平台验收 | P0 | 用真实产物和三平台结果关闭发布门槛 | R1-R6 | 待完成 |
 
@@ -223,6 +223,18 @@ R4 已于 2026-07-31 完成，运行时职责拆分、两阶段写入和发布�
 - `CliTuiApp` 不再拥有具体命令和面板业务。
 - 实时运行与 resume 重建得到同样的可见顺序和摘要。
 - Provider、工具或插件错误后可以继续下一轮，且不会产生重复 block。
+
+### 完成状态
+
+R5 已于 2026-07-31 完成，coding-tools 两阶段写入和发布级验收仍按 R6、R7 独立推进：
+
+- 新增 `RuntimeAdapter`、`CommandController` 和 `ProductScreen` 边界；`CliTuiApp` 仅保留终端生命周期、输入手势、依赖连接和退出编排，具体命令注册、产品面板与 Core/Session 订阅均由对应所有者处理。
+- `PresentationBlock` 按 `id + revision` 幂等投影，拒绝滞后 revision 和同 ID 类型变化；assistant、工具、审批、状态和错误 block 保持独立，无法恢复的乱序事件与损坏记录只进入 diagnostics。
+- Session 持久化新增 presentation 与扩展快照；resume 优先恢复稳定快照，并为旧 Session 从消息、工具结果、审批和插件记录重建摘要，不依赖终端历史字节，也不重新执行工具。
+- `SessionRuntime` 会在后续写入前吸收 store 中更新的 revision，避免 presentation 快照与下一轮运行发生 revision conflict；Provider 或插件错误后交互会话保持可用，下一轮仍可成功执行并在显式退出时完整恢复终端。
+- 新增 11 个 R5 特征用例并更新 2 个错误恢复契约，覆盖命令 registry/help/completion/dispatch 一致性、实时与 replay 等价、revision/损坏/缺失策略、订阅切换、错误后继续、真实 JSONL revision 推进及诊断隔离；既有非 TTY stdout/stderr、resume、continue、scrollback 和性能门槛保持通过。
+- `pnpm typecheck`、`pnpm test`（63 个文件、309 个用例）和 `pnpm build` 通过。
+- 本状态不包含 R6、R7、coding-tools 两阶段写入、跨平台实机发布验收或第 14 节最终完成定义，也不代表成品 CLI 已完成。
 
 ## 9. R6：coding-tools 两阶段写入
 
