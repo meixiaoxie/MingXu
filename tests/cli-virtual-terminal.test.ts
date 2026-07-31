@@ -391,8 +391,10 @@ describe("CLI VirtualTerminal", () => {
     await virtual.flush();
     expect(aborted).toBe(1);
     expect(await virtual.readText()).toContain("aborted");
-    app.exit();
+    virtual.press({ sequence: "", name: "c", ctrl: true });
+    virtual.press({ sequence: "", name: "c", ctrl: true });
     await expect(running).resolves.toBe(0);
+    expect(virtual.writes.at(-1)).toBe("\x1b[?2026l\x1b[?2004l\x1b[?25h");
 
     const exitSession = createSession();
     const exitTerminal = createVirtualTerminal({ columns: 80, rows: 24 });
@@ -413,5 +415,6 @@ describe("CLI VirtualTerminal", () => {
     expect(await exitTerminal.readText()).toContain("Press Ctrl+D again to exit");
     exitTerminal.press({ sequence: "", name: "d", ctrl: true });
     await expect(startPromise).resolves.toBe(0);
+    expect(exitTerminal.writes.at(-1)).toBe("\x1b[?2026l\x1b[?2004l\x1b[?25h");
   });
 });

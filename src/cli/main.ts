@@ -187,8 +187,11 @@ export async function main(
       return result.exitCode;
     }
 
-    const interactiveTerminal = isTTYStream(stdin) && isTTYStream(stdout);
-    const stdinPrompt = !interactiveTerminal && args.prompt === undefined && shouldReadStdinPrompt(args.command)
+    const interactiveTerminal = supportsInteractiveTui(stdin, stdout);
+    const stdinPrompt = !interactiveTerminal
+      && !isTTYStream(stdin)
+      && args.prompt === undefined
+      && shouldReadStdinPrompt(args.command)
       ? await readStdinPrompt(stdin)
       : undefined;
     const effectivePrompt = args.prompt ?? stdinPrompt?.trim();
@@ -217,6 +220,8 @@ export async function main(
         listSessions,
         stdout,
         stderr,
+        stdin,
+        terminalOutput: stdout as NodeJS.WriteStream,
         projectTrusted: configDiscovery.projectTrusted,
         configSources: configDiscovery.sources,
         createTerminal,
@@ -281,9 +286,9 @@ function shouldUseOneShotFallback(command: string | undefined, prompt: string | 
 function formatNonInteractivePromptError(command: string | undefined): string {
   switch (command) {
     case "chat":
-      return "chat mode needs a prompt when stdin or stdout is not a TTY. Pipe text in or pass --prompt.";
+      return "chat mode requires a compatible interactive terminal or a prompt. Pipe text in or pass --prompt.";
     case "resume":
-      return "resume needs a prompt when stdin or stdout is not a TTY. Pipe text in or pass --prompt.";
+      return "resume requires a compatible interactive terminal or a prompt. Pipe text in or pass --prompt.";
     default:
       return "No prompt was provided. Pipe text in, pass --prompt, or run mingxu in an interactive terminal.";
   }
@@ -291,6 +296,16 @@ function formatNonInteractivePromptError(command: string | undefined): string {
 
 function isTTYStream(stream: Pick<NodeJS.WriteStream, "write"> | NodeJS.ReadStream): boolean {
   return Boolean((stream as NodeJS.WriteStream).isTTY);
+}
+
+function supportsInteractiveTui(
+  stdin: NodeJS.ReadStream,
+  stdout: Pick<NodeJS.WriteStream, "write">,
+): boolean {
+  return isTTYStream(stdin)
+    && isTTYStream(stdout)
+    && typeof stdin.setRawMode === "function"
+    && process.env.TERM?.toLowerCase() !== "dumb";
 }
 
 async function resolveContinueSessionId(
@@ -342,6 +357,8 @@ async function runChatLoop(options: {
   listSessions: NonNullable<CliDependencies["listSessions"]>;
   stdout: Pick<NodeJS.WriteStream, "write">;
   stderr: Pick<NodeJS.WriteStream, "write">;
+  stdin: NodeJS.ReadStream;
+  terminalOutput: NodeJS.WriteStream;
   projectTrusted: boolean;
   configSources: readonly { kind: "explicit" | "global" | "project"; path: string }[];
   createTerminal: (stdin: NodeJS.ReadStream, stdout: NodeJS.WriteStream) => ProcessTerminal;
@@ -375,7 +392,7 @@ async function runChatLoop(options: {
     });
     app = new CliTuiApp({
       runtime,
-      terminal: options.createTerminal(process.stdin, process.stdout),
+      terminal: options.createTerminal(options.stdin, options.terminalOutput),
       session,
       ...(options.plain ? { plain: true } : {}),
       ...(currentModelKey !== undefined ? { modelKey: currentModelKey } : {}),

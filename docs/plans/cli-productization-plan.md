@@ -23,7 +23,7 @@
 | 工作包 | 优先级 | 目标 | 前置依赖 | 状态 |
 | --- | --- | --- | --- | --- |
 | R1 终端渲染与真实 scrollback | P0 | 完成历史/活动区域分离和成熟差分渲染包装 | 无 | 已完成（2026-07-31） |
-| R2 终端生命周期与异常恢复 | P0 | 所有退出和降级路径对称恢复终端 | 可与 R1 并行 | 待完成 |
+| R2 终端生命周期与异常恢复 | P0 | 所有退出和降级路径对称恢复终端 | 可与 R1 并行 | 已完成（2026-07-31） |
 | R3 IME、选择区与输入边界 | P0 | 完成真实中文输入法和选择编辑体验 | R1 的 viewport 协议 | 待完成 |
 | R4 产品组件与复杂面板 | P1 | 完成 Markdown、Diff、CommandBlock 和面板交互 | R1、R3 | 待完成 |
 | R5 CLI 职责拆分与 Session replay | P0 | 完成运行适配、命令、屏幕和回放边界 | 稳定事件投影 | 待完成 |
@@ -71,7 +71,7 @@ R1 已于 2026-07-31 完成，后续工作包仍按本计划独立验收：
 - `PreparedRenderFrame` 将终端写入与 committed 前缀推进绑定；普通帧只保留活动区域，完整回放仍保留全部 block 索引。
 - 连续完成前缀、重复/滞后事件、Overlay 往返、普通 delta、60x20/80x24/120x40、仅高度 resize、1,000 条历史和 200 分块性能门槛均已有自动化覆盖。
 - R1 聚焦测试共 5 个文件、14 个用例通过；`pnpm typecheck`、`pnpm test`（55 个文件、244 个用例）和 `pnpm build` 通过。
-- 本状态不包含 R2 的信号、异常退出、EPIPE 或完整终端生命周期恢复工作，也不代表成品 CLI 已完成。
+- R1 的完成证据不承担信号、异常退出、EPIPE 或完整终端生命周期恢复验收；这些证据独立记录在 R2，两个阶段均不代表成品 CLI 已完成。
 
 ## 5. R2：终端生命周期与异常恢复
 
@@ -100,6 +100,17 @@ R1 已于 2026-07-31 完成，后续工作包仍按本计划独立验收：
 - 所有退出路径都恢复终端并清理监听器。
 - 恢复逻辑多次调用不会抛错或重复破坏终端状态。
 - `TERM=dumb`、非 TTY 和缺少 raw mode 时有稳定、可测试的降级行为。
+
+### 完成状态
+
+R2 已于 2026-07-31 完成，成品 CLI 的其他工作包仍保持独立验收：
+
+- `@mingxu/tui` 新增单一 `TerminalLifecycle`，统一持有 raw mode、光标、bracketed paste、同步输出、resize、keypress、readline 内部监听器和进程监听器；进入、部分初始化恢复和重复恢复均为幂等操作。
+- 终端能力按 TTY、raw mode、控制序列、Windows VT、同步输出和 resize 支持显式探测；`TERM=dumb`、非 TTY、缺少 raw mode 和禁用同步输出均有不输出不受支持控制序列的稳定降级路径，能力不足的 TTY 不再被误当作管道永久等待。
+- `CliTuiApp` 统一处理正常退出、Ctrl+C、Ctrl+D、Provider/插件错误、SIGINT、SIGTERM、SIGHUP、未捕获异常、未处理 rejection、交互 stdout EPIPE 和 resize 同时退出；Session 结束后会移除终端与进程监听器。
+- 子进程测试结合 `@xterm/headless` 验证五类进程事件最终关闭同步输出和 bracketed paste、显示光标并恢复 raw mode；应用级测试覆盖重复 Session 无监听器增长、初始化 EPIPE 恢复顺序以及 stdout/stderr 断管行为。
+- R2 聚焦测试共 5 个文件、67 个用例通过；`pnpm typecheck`、`pnpm test`（58 个文件、274 个用例）和 `pnpm build` 通过。
+- 本状态不包含 R3 的 IME/选择区、R4-R7 或第 14 节最终发布门槛，也不代表成品 CLI 已完成。
 
 ## 6. R3：IME、选择区与输入边界
 
@@ -324,7 +335,7 @@ pnpm audit --prod
 
 在第 14 节全部勾选之前，只使用以下表述：
 
-> MingXu 已具备可运行的 Agent 核心、CLI 主链、真实终端 scrollback、TUI 产品原型、真实 coding-tools 插件和安装烟测，正在完成异常恢复、输入法边界、两阶段写入和跨平台发布验收。
+> MingXu 已具备可运行的 Agent 核心、CLI 主链、真实终端 scrollback、完整终端生命周期恢复、TUI 产品原型、真实 coding-tools 插件和安装烟测，正在完成输入法边界、两阶段写入和跨平台发布验收。
 
 全部通过以后，才可以使用：
 

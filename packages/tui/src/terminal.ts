@@ -1,6 +1,10 @@
-import { emitKeypressEvents } from "node:readline";
-
 import { DifferentialRenderer, type DifferentialRenderStats, type FullReplayReason } from "./differential-renderer.js";
+import {
+  TerminalLifecycle,
+  type TerminalCapabilities,
+  type TerminalLifecycleOptions,
+  type TerminalProcessHandlers,
+} from "./terminal-lifecycle.js";
 
 const BRACKETED_PASTE_START = "\x1b[200~";
 const BRACKETED_PASTE_END = "\x1b[201~";
@@ -19,20 +23,27 @@ export class ProcessTerminal {
   readonly #output: NodeJS.WriteStream;
   readonly #resizeListeners = new Set<() => void>();
   readonly #keyListeners = new Set<TerminalKeyListener>();
+  readonly #errorListeners = new Set<(error: unknown) => void>();
   readonly #renderer = new DifferentialRenderer();
-  #rawMode = false;
-  #bracketedPaste = false;
+  readonly #lifecycle: TerminalLifecycle;
   #pasteBuffer: string | undefined;
-  #keypressHandler: ((sequence: string, key: import("node:readline").Key) => void) | undefined;
-  #resizeHandler: (() => void) | undefined;
 
-  constructor(input: NodeJS.ReadStream, output: NodeJS.WriteStream) {
+  constructor(input: NodeJS.ReadStream, output: NodeJS.WriteStream, options: TerminalLifecycleOptions = {}) {
     this.#input = input;
     this.#output = output;
+    this.#lifecycle = new TerminalLifecycle(input, output, options);
   }
 
   get isTTY(): boolean {
-    return this.#input.isTTY && this.#output.isTTY;
+    return Boolean(this.#input.isTTY && this.#output.isTTY);
+  }
+
+  get isInteractive(): boolean {
+    return this.#lifecycle.capabilities.interactive;
+  }
+
+  get capabilities(): TerminalCapabilities {
+    return this.#lifecycle.capabilities;
   }
 
   get size(): TerminalSize {
@@ -52,92 +63,53 @@ export class ProcessTerminal {
     return () => this.#keyListeners.delete(listener);
   }
 
-  enterRawMode(): void {
-    if (!this.isTTY || this.#rawMode) {
-      return;
-    }
-    emitKeypressEvents(this.#input);
-    this.#input.resume();
-    this.#input.setRawMode?.(true);
-    this.#rawMode = true;
-    this.#keypressHandler = (sequence, key) => {
-      if (sequence === BRACKETED_PASTE_START) {
-        this.#pasteBuffer = "";
-        return;
-      }
-      if (this.#pasteBuffer !== undefined) {
-        if (sequence === BRACKETED_PASTE_END) {
-          const pasted = this.#pasteBuffer;
-          this.#pasteBuffer = undefined;
-          this.#emitKeypress({ sequence: pasted, name: "paste" });
-          return;
-        }
-        this.#pasteBuffer += sequence;
-        return;
-      }
-      const input: { sequence: string; name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean } = { sequence };
-      if (key.name !== undefined) input.name = key.name;
-      if (key.ctrl !== undefined) input.ctrl = key.ctrl;
-      if (key.meta !== undefined) input.meta = key.meta;
-      if (key.shift !== undefined) input.shift = key.shift;
-      this.#emitKeypress(input);
-    };
-    this.#input.on("keypress", this.#keypressHandler);
-    this.#resizeHandler = () => {
-      for (const listener of this.#resizeListeners) {
-        listener();
-      }
-    };
-    this.#output.on("resize", this.#resizeHandler);
-    this.#output.write("\x1b[?2004h");
-    this.#bracketedPaste = true;
+  onError(listener: (error: unknown) => void): () => void {
+    this.#errorListeners.add(listener);
+    return () => this.#errorListeners.delete(listener);
+  }
+
+  enterRawMode(): boolean {
+    return this.#lifecycle.enter({
+      onKeypress: (sequence, key) => this.#handleKeypress(sequence, key),
+      onResize: () => {
+        for (const listener of this.#resizeListeners) listener();
+      },
+      onOutputError: (error) => {
+        for (const listener of this.#errorListeners) listener(error);
+      },
+    });
+  }
+
+  bindProcessHandlers(
+    handlers: TerminalProcessHandlers,
+    target?: Pick<NodeJS.Process, "on" | "off">,
+  ): () => void {
+    return this.#lifecycle.bindProcessHandlers(handlers, target);
   }
 
   restore(): void {
-    if (!this.#rawMode && !this.#bracketedPaste) {
-      return;
-    }
-    if (this.#keypressHandler) {
-      this.#input.off("keypress", this.#keypressHandler);
-      this.#keypressHandler = undefined;
-    }
-    if (this.#resizeHandler) {
-      this.#output.off("resize", this.#resizeHandler);
-      this.#resizeHandler = undefined;
-    }
-    if (this.#rawMode) {
-      this.#input.setRawMode?.(false);
-    }
-    this.#rawMode = false;
     this.#pasteBuffer = undefined;
-    if (this.#bracketedPaste) {
-      this.#output.write("\x1b[?2004l");
-      this.#bracketedPaste = false;
-    }
-    this.showCursor();
+    this.#lifecycle.restore();
+    this.#keyListeners.clear();
+    this.#resizeListeners.clear();
+    this.#errorListeners.clear();
   }
 
   write(value: string): void {
-    this.#output.write(value);
+    this.#lifecycle.write(value);
   }
 
   hideCursor(): void {
-    if (this.isTTY) {
-      this.#output.write("\x1b[?25l");
-    }
+    this.#lifecycle.hideCursor();
   }
 
   showCursor(): void {
-    if (this.isTTY) {
-      this.#output.write("\x1b[?25h");
-    }
+    this.#lifecycle.showCursor();
   }
 
   clearActiveRegion(): void {
-    if (!this.isTTY) {
-      return;
-    }
-    this.#output.write("\r\x1b[0J");
+    if (!this.isInteractive) return;
+    this.#lifecycle.write("\r\x1b[0J");
   }
 
   get renderStats(): DifferentialRenderStats {
@@ -152,8 +124,8 @@ export class ProcessTerminal {
       readonly commitPrefixLineCount?: number;
     } = {},
   ): { readonly requiresFullReplay: boolean; readonly replayReason?: FullReplayReason; readonly stats: DifferentialRenderStats } {
-    if (!this.isTTY) {
-      this.#output.write(`${lines.join("\n")}\n`);
+    if (!this.isInteractive) {
+      this.#lifecycle.write(`${lines.join("\n")}\n`);
       return { requiresFullReplay: false, stats: this.#renderer.stats };
     }
 
@@ -165,28 +137,45 @@ export class ProcessTerminal {
         stats: result.stats,
       };
     }
-    if (result.output) this.#output.write(result.output);
+    if (result.output) this.#lifecycle.writeFrame(result.output);
     result.commit();
     return { requiresFullReplay: false, stats: result.stats };
   }
 
   moveCursorTo(row: number, column: number): void {
-    if (!this.isTTY) {
-      return;
-    }
-    this.#output.write(`\x1b[${Math.max(0, row + 1)};${Math.max(0, column + 1)}H`);
+    if (!this.isInteractive) return;
+    this.#lifecycle.write(`\x1b[${Math.max(0, row + 1)};${Math.max(0, column + 1)}H`);
   }
 
   clearLine(): void {
-    if (!this.isTTY) {
+    if (!this.isInteractive) return;
+    this.#lifecycle.write("\x1b[2K\r");
+  }
+
+  #handleKeypress(sequence: string, key: import("node:readline").Key): void {
+    if (sequence === BRACKETED_PASTE_START) {
+      this.#pasteBuffer = "";
       return;
     }
-    this.#output.write("\x1b[2K\r");
+    if (this.#pasteBuffer !== undefined) {
+      if (sequence === BRACKETED_PASTE_END) {
+        const pasted = this.#pasteBuffer;
+        this.#pasteBuffer = undefined;
+        this.#emitKeypress({ sequence: pasted, name: "paste" });
+        return;
+      }
+      this.#pasteBuffer += sequence;
+      return;
+    }
+    const input: { sequence: string; name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean } = { sequence };
+    if (key.name !== undefined) input.name = key.name;
+    if (key.ctrl !== undefined) input.ctrl = key.ctrl;
+    if (key.meta !== undefined) input.meta = key.meta;
+    if (key.shift !== undefined) input.shift = key.shift;
+    this.#emitKeypress(input);
   }
 
   #emitKeypress(input: { sequence: string; name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean }): void {
-    for (const listener of this.#keyListeners) {
-      listener(input);
-    }
+    for (const listener of this.#keyListeners) listener(input);
   }
 }

@@ -55,6 +55,7 @@ export class CliTuiApp {
   readonly #conversation = new CliRuntimeProjection();
   readonly #transcriptTheme;
   readonly #overlays = new OverlayHost();
+  readonly #processTarget: Pick<NodeJS.Process, "on" | "off">;
   #snapshot: CliRuntimeSnapshot | undefined;
   #currentSession: AgentSession;
   #currentSessionId: string | undefined;
@@ -69,6 +70,10 @@ export class CliTuiApp {
   #activePanel: ActivePanel = undefined;
   #approval: PendingApproval | undefined;
   #sessionSubscription: (() => void) | undefined;
+  #terminalKeySubscription: (() => void) | undefined;
+  #terminalResizeSubscription: (() => void) | undefined;
+  #terminalErrorSubscription: (() => void) | undefined;
+  #processSubscription: (() => void) | undefined;
   #composerNotice: string | undefined;
   #blockSeq = 0;
   #finishResolver: ((exitCode: number) => void) | undefined;
@@ -81,12 +86,14 @@ export class CliTuiApp {
     modelKey?: string;
     sessionId?: string;
     plain?: boolean;
+    processTarget?: Pick<NodeJS.Process, "on" | "off">;
   }) {
     this.#runtime = options.runtime;
     this.#terminal = options.terminal;
     this.#currentSession = options.session;
     this.#currentSessionId = options.sessionId;
     this.#currentModelKey = options.modelKey;
+    this.#processTarget = options.processTarget ?? process;
     this.#transcriptTheme = resolveTranscriptTheme({
       ...(options.plain === true ? { plain: true } : {}),
     });
@@ -113,21 +120,30 @@ export class CliTuiApp {
         this.#currentModelKey = this.#snapshot.defaultModel;
       }
       this.#bindSession(this.#currentSession);
-      this.#terminal.enterRawMode();
+      const completion = new Promise<number>((resolve) => {
+        this.#finishResolver = resolve;
+      });
+      this.#exitRequested = false;
+      this.#terminalKeySubscription = this.#terminal.onKeypress((input) => this.#handleKeypress(input));
+      this.#terminalResizeSubscription = this.#terminal.onResize(() => this.#host.requestRender());
+      this.#terminalErrorSubscription = this.#terminal.onError?.((error) => this.#handleTerminalError(error));
+      const entered = this.#terminal.enterRawMode();
+      if (entered === false) {
+        throw new Error("Interactive terminal capabilities are unavailable.");
+      }
+      this.#processSubscription = this.#terminal.bindProcessHandlers?.({
+        onSignal: (signal) => this.#handleProcessSignal(signal),
+        onFatalError: (error) => this.#handleFatalError(error),
+      }, this.#processTarget);
       this.#terminal.hideCursor();
-      this.#terminal.onKeypress((input) => this.#handleKeypress(input));
-      this.#terminal.onResize(() => this.#host.requestRender());
       this.#host.requestRender({ full: true });
 
       if (initialPrompt?.trim()) {
         this.#enqueuePrompt(initialPrompt.trim());
       }
 
-      return await new Promise<number>((resolve) => {
-        this.#finishResolver = resolve;
-        this.#exitRequested = false;
-        this.#tryFinish();
-      });
+      this.#tryFinish();
+      return await completion;
     } finally {
       this.#shutdown();
     }
@@ -817,13 +833,17 @@ export class CliTuiApp {
 
   #handleFatalError(error: unknown): void {
     const message = error instanceof Error ? error.message : String(error);
-    this.#running = false;
     this.#conversation.addError(this.#nextBlockId("error"), "fatal error", redactText(message));
-    this.#exitRequested = true;
-    const resolve = this.#finishResolver;
-    this.#finishResolver = undefined;
-    this.#shutdown();
-    resolve?.(1);
+    this.#terminate(1);
+  }
+
+  #handleTerminalError(error: unknown): void {
+    this.#terminate(isBrokenPipeError(error) ? 0 : 1);
+  }
+
+  #handleProcessSignal(signal: NodeJS.Signals): void {
+    const exitCode = signal === "SIGINT" ? 130 : signal === "SIGTERM" ? 143 : 129;
+    this.#terminate(exitCode, `Interrupted by ${signal}`);
   }
 
   #handleKeypress(input: { sequence: string; name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean }): void {
@@ -1140,10 +1160,29 @@ export class CliTuiApp {
     }
     this.#shutdownCompleted = true;
     this.#host.dispose();
-    this.#terminal.showCursor();
-    this.#terminal.restore();
+    this.#terminalKeySubscription?.();
+    this.#terminalKeySubscription = undefined;
+    this.#terminalResizeSubscription?.();
+    this.#terminalResizeSubscription = undefined;
+    this.#terminalErrorSubscription?.();
+    this.#terminalErrorSubscription = undefined;
+    this.#processSubscription?.();
+    this.#processSubscription = undefined;
     this.#sessionSubscription?.();
     this.#sessionSubscription = undefined;
+    this.#terminal.restore();
+  }
+
+  #terminate(exitCode: number, abortReason?: string): void {
+    if (abortReason && this.#running) this.#currentSession.abort(abortReason);
+    this.#running = false;
+    this.#exitRequested = true;
+    this.#approval?.resolve(undefined);
+    this.#approval = undefined;
+    const resolve = this.#finishResolver;
+    this.#finishResolver = undefined;
+    this.#shutdown();
+    resolve?.(exitCode);
   }
 
   #tryFinish(): void {
@@ -1363,4 +1402,8 @@ function formatToolInput(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function isBrokenPipeError(value: unknown): value is NodeJS.ErrnoException {
+  return value instanceof Error && "code" in value && value.code === "EPIPE";
 }

@@ -244,7 +244,7 @@ describe("mingxu CLI", () => {
     const terminal = createInteractiveTerminal();
     const stdout = { write: vi.fn(), isTTY: true };
     const stderr = { write: vi.fn(), isTTY: true };
-    const stdin = { isTTY: true } as unknown as NodeJS.ReadStream;
+    const stdin = { isTTY: true, setRawMode: vi.fn() } as unknown as NodeJS.ReadStream;
 
     try {
       const promptStarted = new Promise<void>((resolve) => {
@@ -265,12 +265,84 @@ describe("mingxu CLI", () => {
       await expect(exitPromise).resolves.toBe(0);
       expect(terminal.enterRawMode).toHaveBeenCalledOnce();
       expect(terminal.hideCursor).toHaveBeenCalledOnce();
-      expect(terminal.showCursor).toHaveBeenCalledOnce();
+      expect(terminal.showCursor).not.toHaveBeenCalled();
       expect(terminal.restore).toHaveBeenCalledOnce();
       expect(stdout.write).toHaveBeenCalledWith(expect.stringContaining("mingxu chat. Type /help for commands."));
       expect(stderr.write).not.toHaveBeenCalled();
     } finally {
       delete (globalThis as { __mingxuTtyPromptStarted?: () => void }).__mingxuTtyPromptStarted;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["missing raw mode", undefined],
+    ["TERM=dumb", "dumb"],
+  ])("does not wait for input when a TTY has %s", async (_label, term) => {
+    const { root, configPath } = await writeConfigFile({
+      defaultModel: "primary",
+      models: {
+        primary: { provider: "anthropic", model: "claude-sonnet-5", apiKey: "test-key" },
+      },
+    });
+    const stdout = { write: vi.fn(), isTTY: true };
+    const stderr = { write: vi.fn(), isTTY: true };
+    const stdin = {
+      isTTY: true,
+      ...(term === undefined ? {} : { setRawMode: vi.fn() }),
+      [Symbol.asyncIterator]: vi.fn(() => {
+        throw new Error("TTY input must not be consumed as a pipe");
+      }),
+    } as unknown as NodeJS.ReadStream;
+
+    if (term !== undefined) vi.stubEnv("TERM", term);
+    try {
+      await expect(main(["--config", configPath, "chat"], { stdout, stderr, stdin })).resolves.toBe(1);
+      expect(stdin[Symbol.asyncIterator]).not.toHaveBeenCalled();
+      expect(stderr.write).toHaveBeenCalledWith(expect.stringContaining("compatible interactive terminal or a prompt"));
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("restores after interactive terminal initialization hits EPIPE", async () => {
+    const { root, configPath } = await writeConfigFile({
+      defaultModel: "primary",
+      models: {
+        primary: { provider: "anthropic", model: "claude-sonnet-5", apiKey: "test-key" },
+      },
+    });
+    const brokenPipe = Object.assign(new Error("broken pipe"), { code: "EPIPE" });
+    const events: string[] = [];
+    const terminal = {
+      size: { columns: 80, rows: 24 },
+      onKeypress: () => () => undefined,
+      onResize: () => () => undefined,
+      onError: () => () => undefined,
+      enterRawMode: vi.fn(() => {
+        events.push("enter");
+        throw brokenPipe;
+      }),
+      hideCursor: vi.fn(),
+      restore: vi.fn(() => events.push("restore")),
+      render: vi.fn(),
+    } as unknown as ProcessTerminal;
+    const stdin = { isTTY: true, setRawMode: vi.fn() } as unknown as NodeJS.ReadStream;
+    const stdout = { write: vi.fn(), isTTY: true };
+    const stderr = { write: vi.fn(), isTTY: true };
+
+    try {
+      await expect(main(["--config", configPath, "chat"], {
+        stdout,
+        stderr,
+        stdin,
+        terminalFactory: () => terminal,
+      })).resolves.toBe(0);
+      expect(events).toEqual(["enter", "restore"]);
+      expect(terminal.hideCursor).not.toHaveBeenCalled();
+      expect(stderr.write).not.toHaveBeenCalled();
+    } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
