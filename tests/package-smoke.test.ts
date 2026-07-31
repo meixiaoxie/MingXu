@@ -185,7 +185,13 @@ afterAll(async () => {
 describe("packed CLI and public API smoke path", () => {
   it("installs a CLI bin that prints help and version", async () => {
     const entryPath = join(installDirectory, "node_modules", "@mingxu", "cli", "dist", "entry.js");
+    const packageJsonPath = join(installDirectory, "node_modules", "@mingxu", "cli", "package.json");
     const entrySource = await readFile(entryPath, "utf8");
+    const installedPackage = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
+      readonly bin?: Record<string, string>;
+      readonly files?: string[];
+      readonly dependencies?: Record<string, string>;
+    };
     const entryStats = await stat(entryPath);
 
     // npm must create a platform-specific command link, while the target needs
@@ -195,6 +201,9 @@ describe("packed CLI and public API smoke path", () => {
     expect((await stat(binPath)).isFile()).toBe(true);
     expect(entrySource.startsWith("#!/usr/bin/env node")).toBe(true);
     expect(entryStats.isFile()).toBe(true);
+    expect(installedPackage.bin).toMatchObject({ mingxu: "./dist/entry.js" });
+    expect(installedPackage.files).toEqual(["dist"]);
+    expect(installedPackage.dependencies ?? {}).not.toHaveProperty("@mingxu/tui");
 
     const helpResult = await runCommand(
       process.platform === "win32" ? process.env.ComSpec ?? "cmd.exe" : binPath,

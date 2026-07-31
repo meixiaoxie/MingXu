@@ -151,4 +151,54 @@ describe("CLI stream routing", () => {
     expect(stderr.write).toHaveBeenNthCalledWith(1, "[tool] read-file\n");
     expect(stderr.write).toHaveBeenNthCalledWith(2, "[tool] read-file done\n");
   });
+
+  it("removes the SIGINT listener after aborting an in-flight prompt", async () => {
+    const beforeListeners = process.listenerCount("SIGINT");
+    let resolvePrompt: ((value: {
+      content: string;
+      messages: [];
+      iterations: number;
+      terminationReason: string;
+    }) => void) | undefined;
+
+    const promptPromise = new Promise<{
+      content: string;
+      messages: [];
+      iterations: number;
+      terminationReason: string;
+    }>((resolve) => {
+      resolvePrompt = resolve;
+    });
+
+    const session = {
+      subscribe() {
+        return () => undefined;
+      },
+      prompt: async () => promptPromise,
+      abort: () => {
+        resolvePrompt?.({
+          content: "",
+          messages: [],
+          iterations: 1,
+          terminationReason: "aborted",
+        });
+      },
+    } as unknown as AgentSession;
+
+    const stdout = { write: vi.fn() };
+    const stderr = { write: vi.fn() };
+
+    const run = runChatPrompt({
+      session,
+      prompt: "Keep running",
+      stdout,
+      stderr,
+    });
+
+    process.emit("SIGINT");
+
+    await expect(run).resolves.toEqual({});
+    expect(process.listenerCount("SIGINT")).toBe(beforeListeners);
+    expect(stderr.write).not.toHaveBeenCalledWith(expect.stringContaining("Error:"));
+  });
 });

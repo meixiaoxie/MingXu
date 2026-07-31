@@ -1039,4 +1039,146 @@ describe("mingxu CLI", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("streams long outputs to stdout while keeping tool logs on stderr", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mingxu-cli-streaming-"));
+    const configPath = join(root, "mingxu.config.json");
+    const providerPath = join(root, "providers.mjs");
+    const pluginPath = join(root, "stream-tools.mjs");
+    const pluginSource = [
+      "const markdownOutput = [",
+      "  '## Markdown tool output',",
+      "  '',",
+      "  '```markdown',",
+      "  ' - alpha',",
+      "  ' - beta',",
+      "  '```',",
+      "  '',",
+      "  'Command: pnpm test',",
+      "].join('\\n');",
+      "const diffOutput = [",
+      "  '```diff',",
+      "  '+ added line',",
+      "  '- removed line',",
+      "  '```',",
+      "].join('\\n');",
+      "export default {",
+      "  name: 'stream-tools',",
+      "  manifest: {",
+      "    apiVersion: 'mingxu/plugin-v1',",
+      "    id: 'stream-tools',",
+      "    name: 'stream-tools',",
+      "    version: '1.0.0',",
+      "    kind: 'tool',",
+      "    adapterId: 'mingxu-native',",
+      "    entry: 'index.js',",
+      "    contributions: [",
+      "      { kind: 'tool', name: 'markdown-tool', description: 'Return markdown output.' },",
+      "      { kind: 'tool', name: 'diff-tool', description: 'Return diff output.' },",
+      "    ],",
+      "  },",
+      "  async setup(context) {",
+      "    context.registerTool({",
+      "      name: 'markdown-tool',",
+      "      description: 'Return markdown output.',",
+      "      inputSchema: { type: 'object' },",
+      "      executionMode: 'parallel',",
+      "      async execute() {",
+      "        return markdownOutput;",
+      "      },",
+      "    });",
+      "    context.registerTool({",
+      "      name: 'diff-tool',",
+      "      description: 'Return diff output.',",
+      "      inputSchema: { type: 'object' },",
+      "      executionMode: 'parallel',",
+      "      async execute() {",
+      "        return diffOutput;",
+      "      },",
+      "    });",
+      "  },",
+      "};",
+    ].join("\n");
+    const providerSource = [
+      "let callCount = 0;",
+      "export function register(registry) {",
+      "  registry.register({",
+      "    provider: 'streaming-test',",
+      "    capabilities: {",
+      "      supportsTools: true,",
+      "      supportsStreaming: true,",
+      "      supportsImages: false,",
+      "      supportsStructuredOutput: false,",
+      "      supportsRefusal: false,",
+      "      supportsFallback: false,",
+      "      supportsEffort: false,",
+      "      supportsPromptCaching: false,",
+      "      supportsMidConversationSystem: false,",
+      "      maxContext: 1000,",
+      "      maxOutput: 100,",
+      "    },",
+      "    create() {",
+      "      return {",
+      "        provider: 'streaming-test',",
+      "        capabilities: this.capabilities,",
+      "        async *stream(request) {",
+      "          callCount += 1;",
+      "          if (callCount === 1) {",
+      "            yield { type: 'start', request };",
+      "            for (let index = 0; index < 220; index += 1) {",
+      "              yield { type: 'delta', text: `chunk-${String(index).padStart(3, '0')} ` };",
+      "            }",
+      "            yield { type: 'tool_call', toolCall: { id: 'tool-markdown', name: 'markdown-tool', input: { view: 'markdown' } } };",
+      "            yield { type: 'tool_call', toolCall: { id: 'tool-diff', name: 'diff-tool', input: { view: 'diff' } } };",
+      "            yield { type: 'end', response: { text: '', toolCalls: [] } };",
+      "            return;",
+      "          }",
+      "          const toolText = request.messages",
+      "            .filter((message) => message.role === 'tool')",
+      "            .map((message) => message.content)",
+      "            .join('\\n\\n');",
+      "          yield { type: 'start', request };",
+      "          if (toolText) {",
+      "            yield { type: 'delta', text: toolText };",
+      "          }",
+      "          yield { type: 'end', response: { text: toolText, toolCalls: [] } };",
+      "        },",
+      "      };",
+      "    },",
+      "  });",
+      "}",
+    ].join("\n");
+    await mkdir(root, { recursive: true });
+    await writeFile(providerPath, providerSource, "utf8");
+    await writeFile(pluginPath, pluginSource, "utf8");
+    await writeFile(configPath, JSON.stringify({
+      defaultModel: "stream",
+      models: {
+        stream: { provider: "streaming-test", model: "stream-model" },
+      },
+      customProviders: {
+        module: "./providers.mjs",
+      },
+      plugins: [
+        { path: "./stream-tools.mjs", trust: "trusted_local", kind: "tool", manifest: "stream-tools" },
+      ],
+    }), "utf8");
+
+    try {
+      const stdout = { write: vi.fn(), isTTY: false };
+      const stderr = { write: vi.fn() };
+      const stdin = createEmptyPipedStdin();
+
+      await expect(main(["--config", configPath, "Stream me"], { stdout, stderr, stdin })).resolves.toBe(0);
+
+      const stdoutText = stdout.write.mock.calls.map((call) => String(call[0])).join("");
+      const stderrText = stderr.write.mock.calls.map((call) => String(call[0])).join("");
+      expect(stdoutText).toContain("Markdown tool output");
+      expect(stdoutText).toContain("Command: pnpm test");
+      expect(stdoutText).toContain("added line");
+      expect(stderrText).toContain("[plugin] Loading ./stream-tools.mjs");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

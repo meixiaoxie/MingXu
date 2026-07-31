@@ -329,7 +329,10 @@ function normalizeRunResult(result: string | void | AgentLoopResult | undefined)
       terminationReason: "completed",
     };
   }
-  return result;
+  if (typeof result === "object" && result !== null && "content" in result && typeof (result as { content?: unknown }).content === "string") {
+    return result as AgentLoopResult;
+  }
+  return undefined;
 }
 
 async function runChatLoop(options: {
@@ -1111,7 +1114,7 @@ export async function runChatPrompt(options: {
   readonly prompt: string;
   readonly stdout: Pick<NodeJS.WriteStream, "write">;
   readonly stderr: Pick<NodeJS.WriteStream, "write">;
-}): Promise<{ sessionId?: string }> {
+}): Promise<{ sessionId?: string } | undefined> {
   let messageActive = false;
   let messageHadText = false;
   const projection = new CliRuntimeProjection();
@@ -1174,7 +1177,7 @@ export async function runChatPrompt(options: {
   } catch (error) {
     const message = redactText(error instanceof Error ? error.message : String(error));
     options.stderr.write(`Error: ${message}\n`);
-    return {};
+    return undefined;
   } finally {
     process.off("SIGINT", handleSigint);
     unsubscribe();

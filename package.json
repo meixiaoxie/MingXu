@@ -46,14 +46,15 @@
     "pack:dry-run": "pnpm -C packages/cli pack:dry-run"
   },
   "dependencies": {
-    "@mingxu/tui": "workspace:*",
     "@mingxu/plugin-sdk": "workspace:*",
+    "@mingxu/tui": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "string-width": "^8.2.2",
     "zod": "^3.25.67"
   },
   "devDependencies": {
     "@types/node": "^22.15.30",
+    "@xterm/headless": "6.0.0",
     "esbuild": "^0.28.1",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
