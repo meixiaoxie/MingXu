@@ -1,41 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { CliTuiApp } from "../src/cli/tui-app.js";
 import type { CliRuntimeContext, CliRuntimeSnapshot } from "../src/cli/runtime-types.js";
 import type { AgentSession } from "../src/core/agent-session.js";
-import { ProcessTerminal } from "@mingxu/tui";
-
-function createTerminal() {
-  const keyListeners: Array<(input: { sequence: string; name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean }) => void> = [];
-  const terminal = {
-    size: { columns: 80, rows: 12 },
-    enterRawMode: vi.fn(),
-    hideCursor: vi.fn(),
-    showCursor: vi.fn(),
-    restore: vi.fn(),
-    render: vi.fn(),
-    onKeypress(listener: (input: { sequence: string; name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean }) => void) {
-      keyListeners.push(listener);
-      return () => {
-        const index = keyListeners.indexOf(listener);
-        if (index >= 0) {
-          keyListeners.splice(index, 1);
-        }
-      };
-    },
-    onResize() {
-      return () => undefined;
-    },
-    emit(input: { sequence: string; name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean }) {
-      for (const listener of keyListeners) {
-        listener(input);
-      }
-    },
-  } as unknown as ProcessTerminal & {
-    emit(input: { sequence: string; name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean }): void;
-  };
-  return terminal;
-}
+import type { AgentEvent } from "../src/events/types.js";
+import { createVirtualTerminal } from "./helpers/virtual-terminal.js";
 
 function createSnapshot(): CliRuntimeSnapshot {
   return {
@@ -56,111 +25,190 @@ function createSnapshot(): CliRuntimeSnapshot {
   };
 }
 
-function createSession(options: {
-  readonly promptImpl?: (prompt: string, listeners: Array<(event: any) => void>) => Promise<{ content: string; messages: []; iterations: number; terminationReason: string }>;
-} = {}): AgentSession {
-  const listeners: Array<(event: any) => void> = [];
+function createAssistantMessage(id: string, content: string) {
   return {
+    id,
+    role: "assistant" as const,
+    content,
+    createdAt: "2026-07-31T00:00:00.000Z",
+  };
+}
+
+function createHarness(options: {
+  readonly columns?: number;
+  readonly rows?: number;
+  readonly scrollback?: number;
+} = {}) {
+  const virtual = createVirtualTerminal(options);
+  const listeners: Array<(event: AgentEvent) => void> = [];
+  const session = {
     state: { model: "primary", messages: [], tools: [], isStreaming: false, pendingToolCalls: [] },
     options: { model: { provider: "fake", generate: async () => ({ content: "", toolCalls: [] }) } as never },
-    subscribe(listener: (event: any) => void) {
+    subscribe(listener: (event: AgentEvent) => void) {
       listeners.push(listener);
       return () => {
         const index = listeners.indexOf(listener);
-        if (index >= 0) {
-          listeners.splice(index, 1);
-        }
+        if (index >= 0) listeners.splice(index, 1);
       };
     },
-    prompt: async (prompt: string) => {
-      if (options.promptImpl) {
-        return await options.promptImpl(prompt, listeners);
-      }
-      return { content: "ok", messages: [], iterations: 1, terminationReason: "completed" };
-    },
+    prompt: async () => ({ content: "ok", messages: [], iterations: 1, terminationReason: "completed" }),
     followUp: () => undefined,
     steer: () => undefined,
     abort: () => undefined,
   } as unknown as AgentSession;
+  const runtime: CliRuntimeContext = {
+    createSession: () => session,
+    listSessions: async () => "",
+    listRecentSessions: async () => [],
+    snapshot: async () => createSnapshot(),
+    close: async () => undefined,
+  };
+  const app = new CliTuiApp({
+    runtime,
+    terminal: virtual.terminal,
+    session,
+    modelKey: "primary",
+    sessionId: "session-1",
+  });
+  return {
+    app,
+    virtual,
+    emit(event: AgentEvent): void {
+      for (const listener of listeners) listener(event);
+    },
+  };
 }
 
-describe("phase B scrollback", () => {
-  it("keeps long transcripts instead of trimming them to the viewport", async () => {
-    const terminal = createTerminal();
-    let promptCompleted: (() => void) | undefined;
-    const promptDone = new Promise<void>((resolve) => {
-      promptCompleted = resolve;
-    });
-    const session = createSession({
-      promptImpl: async (_prompt, listeners) => {
-        for (let index = 0; index < 40; index += 1) {
-          const id = `assistant-${index}`;
-          for (const listener of listeners) {
-            listener({ type: "message_start", message: { role: "assistant", id, content: "" } });
-            listener({
-              type: "message_update",
-              message: { role: "assistant", id, content: `block ${index}` },
-              delta: { type: "text_delta", text: `block ${index}` },
-            });
-            listener({ type: "message_end", message: { role: "assistant", id, content: `block ${index}` } });
-          }
-        }
-        promptCompleted?.();
-        return { content: "done", messages: [], iterations: 1, terminationReason: "completed" };
-      },
-    });
-    const runtime: CliRuntimeContext = {
-      createSession: () => session,
-      listSessions: async () => "",
-      listRecentSessions: async () => [],
-      snapshot: async () => createSnapshot(),
-      close: async () => undefined,
-    };
-    const app = new CliTuiApp({
-      runtime,
-      terminal,
-      session,
-      modelKey: "primary",
-      sessionId: "session-1",
-    });
+function emitCompletedAssistant(
+  emit: (event: AgentEvent) => void,
+  id: string,
+  content: string,
+): void {
+  emit({ type: "message_start", message: createAssistantMessage(id, "") });
+  emit({
+    type: "message_update",
+    message: createAssistantMessage(id, content),
+    delta: { type: "text_delta", text: content },
+  });
+  emit({ type: "message_end", message: createAssistantMessage(id, content) });
+}
 
-    await app.refreshSnapshot();
-    const startPromise = app.start("show history");
-    await promptDone;
+describe("R1 CLI scrollback", () => {
+  it("commits completed blocks once and does not replay them for late events or overlays", async () => {
+    const { app, virtual, emit } = createHarness({ columns: 80, rows: 24, scrollback: 500 });
+    const startPromise = app.start();
+    await virtual.flush();
+    const transcriptStart = virtual.writes.length;
 
-    const rendered = app.render(80).join("\n");
-    expect(rendered).toContain("block 0");
-    expect(rendered).toContain("block 39");
+    const settledText = "settled-answer-r1";
+    emitCompletedAssistant(emit, "assistant-settled", settledText);
+    await virtual.flush();
+
+    const committedBytes = virtual.writes.slice(transcriptStart).join("");
+    expect(committedBytes.split(settledText)).toHaveLength(2);
+    expect(app.transcriptStats).toEqual({ committedBlockCount: 1, activeBlockCount: 0 });
+    expect(await virtual.readText()).toContain(settledText);
+
+    const laterStart = virtual.writes.length;
+    emit({ type: "message_end", message: createAssistantMessage("assistant-settled", settledText) });
+    emit({
+      type: "message_update",
+      message: createAssistantMessage("assistant-settled", "stale"),
+      delta: { type: "text_delta", text: "stale" },
+    });
+    const approval = app.openApproval({
+      toolName: "readFile",
+      toolCallId: "tool-r1",
+      principalId: "local-user",
+      requestFingerprint: "fingerprint-r1",
+      actionKind: "tool.call",
+      resourceScope: "file",
+      reason: "verify overlay",
+      input: { path: "README.md" },
+      policyEffect: "ask",
+    });
+    await virtual.flush();
+    virtual.press({ sequence: "", name: "enter" });
+    await expect(approval).resolves.toMatchObject({ decision: "allow", scope: "once" });
+    await virtual.flush();
+
+    const laterBytes = virtual.writes.slice(laterStart).join("");
+    expect(laterBytes).not.toContain(settledText);
+    expect(laterBytes).not.toContain("stale");
+    expect(laterBytes).not.toContain("\u001b[2J");
 
     app.exit();
     await expect(startPromise).resolves.toBe(0);
   });
 
-  it("restores terminal state after a prompt failure", async () => {
-    const terminal = createTerminal();
-    const session = createSession({
-      promptImpl: async () => {
-        throw new Error("provider failed");
-      },
-    });
-    const runtime: CliRuntimeContext = {
-      createSession: () => session,
-      listSessions: async () => "",
-      listRecentSessions: async () => [],
-      snapshot: async () => createSnapshot(),
-      close: async () => undefined,
-    };
-    const app = new CliTuiApp({
-      runtime,
-      terminal,
-      session,
-      modelKey: "primary",
-      sessionId: "session-1",
-    });
+  it("keeps 1,000 completed messages out of the active render set", async () => {
+    const { app, virtual, emit } = createHarness({ columns: 80, rows: 24, scrollback: 4_000 });
+    const startPromise = app.start();
+    await virtual.flush();
 
-    await app.refreshSnapshot();
-    await expect(app.runPrompt("boom")).rejects.toThrow("provider failed");
-    expect(terminal.showCursor).toHaveBeenCalled();
-    expect(terminal.restore).toHaveBeenCalled();
+    for (let index = 0; index < 1_000; index += 1) {
+      emitCompletedAssistant(
+        emit,
+        `assistant-history-${index}`,
+        `history-r1-${String(index).padStart(4, "0")}`,
+      );
+    }
+    await virtual.flush();
+
+    expect(app.transcriptStats).toEqual({ committedBlockCount: 1_000, activeBlockCount: 0 });
+    expect(virtual.terminal.renderStats.activeLineCount).toBeLessThan(20);
+    expect(virtual.screen.buffer.active.baseY).toBeGreaterThan(0);
+    const scrollback = await virtual.readText();
+    expect(scrollback).toContain("history-r1-0000");
+    expect(scrollback).toContain("history-r1-0999");
+
+    const deltaStart = virtual.writes.length;
+    emit({ type: "message_start", message: createAssistantMessage("assistant-live", "") });
+    emit({
+      type: "message_update",
+      message: createAssistantMessage("assistant-live", "live-tail-r1"),
+      delta: { type: "text_delta", text: "live-tail-r1" },
+    });
+    await virtual.flush();
+
+    const deltaBytes = virtual.writes.slice(deltaStart).join("");
+    expect(deltaBytes).toContain("live-tail-r1");
+    expect(deltaBytes).not.toContain("history-r1-0000");
+    expect(deltaBytes).not.toContain("history-r1-0999");
+    expect(deltaBytes).not.toContain("\u001b[2J");
+    expect(virtual.terminal.renderStats.renderedLineCount).toBeLessThan(10);
+    expect(app.transcriptStats).toEqual({ committedBlockCount: 1_000, activeBlockCount: 1 });
+
+    app.exit();
+    await expect(startPromise).resolves.toBe(0);
+  });
+
+  it("replays committed history only when resize requires recovery", async () => {
+    const { app, virtual, emit } = createHarness({ columns: 80, rows: 24, scrollback: 1_000 });
+    const startPromise = app.start();
+    await virtual.flush();
+    emitCompletedAssistant(emit, "assistant-wide", "resize-r1 中文 😀 long transcript line");
+    await virtual.flush();
+
+    for (const [columns, rows] of [[60, 20], [80, 24], [120, 40]] as const) {
+      const resizeStart = virtual.writes.length;
+      virtual.resize(columns, rows);
+      await virtual.flush();
+      const resizeBytes = virtual.writes.slice(resizeStart).join("");
+      expect(resizeBytes, `${columns}x${rows} should replay history`).toContain("resize-r1");
+      expect(resizeBytes, `${columns}x${rows} should clear only for recovery`).toContain("\u001b[2J");
+      expect(await virtual.readText(), `${columns}x${rows} should preserve wide text`).toContain("中文");
+    }
+
+    expect(virtual.terminal.renderStats.lastFullRedrawReason).toBe("width-change");
+    const heightOnlyStart = virtual.writes.length;
+    virtual.resize(120, 30);
+    await virtual.flush();
+    const heightOnlyBytes = virtual.writes.slice(heightOnlyStart).join("");
+    expect(heightOnlyBytes).not.toContain("resize-r1");
+    expect(heightOnlyBytes).not.toContain("\u001b[2J");
+    expect(await virtual.readText()).toContain("中文");
+    app.exit();
+    await expect(startPromise).resolves.toBe(0);
   });
 });

@@ -1,7 +1,11 @@
 import type { ApprovalPrompt, ApprovalResponse } from "../approval/types.js";
 import type { ToolResult } from "../core/messages.js";
 import type { AgentEvent } from "../events/types.js";
-import { ConversationViewModel, type ConversationRenderOptions } from "./conversation-view-model.js";
+import {
+  ConversationViewModel,
+  type ConversationRenderOptions,
+  type PreparedConversationRender,
+} from "./conversation-view-model.js";
 
 interface ProjectionState {
   running: boolean;
@@ -102,8 +106,24 @@ export class CliRuntimeProjection {
     return this.conversation.render(width, options);
   }
 
+  prepareRender(
+    width: number,
+    options: ConversationRenderOptions,
+    frameOptions: { readonly full: boolean },
+  ): PreparedConversationRender {
+    return this.conversation.prepareRender(width, options, frameOptions);
+  }
+
   get blocks() {
     return this.conversation.blocks;
+  }
+
+  get committedBlockCount(): number {
+    return this.conversation.committedBlockCount;
+  }
+
+  get activeBlockCount(): number {
+    return this.conversation.activeBlockCount;
   }
 
   getBlock(id: string) {

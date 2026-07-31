@@ -3,7 +3,7 @@ import { inspect } from "node:util";
 import { AgentSession } from "../core/agent-session.js";
 import type { AgentEvent } from "../events/types.js";
 import type { ApprovalPrompt, ApprovalResponse, ApprovalResponseScope } from "../approval/types.js";
-import { ProcessTerminal, Box, Editor, KeyValue, Markdown, SelectList, Table, Text, Tree, TuiHost, type SelectListItem, type TreeNode, type KeyInput, type Component, type OverlayFrame } from "@mingxu/tui";
+import { ProcessTerminal, Box, Editor, KeyValue, Markdown, SelectList, Table, Text, Tree, TuiHost, type SelectListItem, type TreeNode, type KeyInput, type Component, type InlineFrameComponent, type OverlayFrame, type PreparedRenderFrame } from "@mingxu/tui";
 import { truncateToWidth, visibleWidth, wrapText } from "@mingxu/tui";
 import type { CliRuntimeContext, CliRuntimeSnapshot, CliSessionRequest } from "./runtime-types.js";
 import { formatChatHelp, suggestChatCommands } from "./chat-commands.js";
@@ -153,6 +153,13 @@ export class CliTuiApp {
     return this.#running;
   }
 
+  get transcriptStats(): { readonly committedBlockCount: number; readonly activeBlockCount: number } {
+    return {
+      committedBlockCount: this.#conversation.committedBlockCount,
+      activeBlockCount: this.#conversation.activeBlockCount,
+    };
+  }
+
   get activePanel(): ActivePanel {
     return this.#activePanel;
   }
@@ -208,7 +215,6 @@ export class CliTuiApp {
     }
 
     this.#running = true;
-    this.#showWelcomeBanner = false;
     this.#exitArmed = false;
     this.#ctrlDArmed = false;
     this.#pushUserBlock(cleaned);
@@ -693,7 +699,7 @@ export class CliTuiApp {
     const input = this.#editor.render(width).map((line) => line.replace(/\u001b_pi:c\u0007/gu, ""));
     const footer = this.#renderFooter(snapshot, activeModel, width);
     this.#syncOverlayStack();
-    const overlay = this.#overlays.render(width, height);
+    const overlay = this.#overlays.render(width, this.#overlayViewportHeight(height, footer.length, input.length));
     const notice = this.#composerNotice ? [this.#composerNotice] : [];
 
     const lines = [
@@ -708,6 +714,46 @@ export class CliTuiApp {
     ];
 
     return lines;
+  }
+
+  prepareFrame(width: number, height: number | undefined, options: { readonly full: boolean }): PreparedRenderFrame {
+    const snapshot = this.#snapshot;
+    const activeModel = this.#currentModelKey ?? snapshot?.defaultModel ?? "default";
+    const showHeader = options.full || this.#showWelcomeBanner;
+    const header = showHeader
+      ? [`MingXu | model: ${activeModel} | cwd: ${process.cwd()} | trust: ${snapshot?.projectTrusted ? "trusted" : "untrusted"}`]
+      : [];
+    const conversation = this.#conversation.prepareRender(width, {
+      detailed: this.#detailedTranscript,
+      theme: this.#transcriptTheme,
+    }, options);
+    const input = this.#editor.render(width).map((line) => line.replace(/\u001b_pi:c\u0007/gu, ""));
+    const footer = this.#renderFooter(snapshot, activeModel, width);
+    this.#syncOverlayStack();
+    const overlay = this.#overlays.render(width, this.#overlayViewportHeight(height, footer.length, input.length));
+    const notice = this.#composerNotice ? [this.#composerNotice] : [];
+    const headerSection = header.length > 0 ? [...header, ""] : [];
+    const lines = [
+      ...headerSection,
+      ...conversation.lines,
+      ...(overlay.length > 0 ? ["", ...overlay, ""] : []),
+      ...(footer.length > 0 ? ["", ...footer] : []),
+      ...(notice.length > 0 ? ["", ...notice] : []),
+      "",
+      ...input,
+    ];
+    const commitPrefixLineCount = headerSection.length + conversation.commitPrefixLineCount;
+    let committed = false;
+    return {
+      lines,
+      commitPrefixLineCount,
+      commit: () => {
+        if (committed) return;
+        committed = true;
+        if (showHeader) this.#showWelcomeBanner = false;
+        conversation.commit();
+      },
+    };
   }
 
   async #refreshSnapshot(): Promise<void> {
@@ -1111,7 +1157,6 @@ export class CliTuiApp {
   }
 
   #pushUserBlock(text: string): void {
-    this.#showWelcomeBanner = false;
     this.#conversation.pushUserMessage(this.#nextBlockId("user"), text);
   }
 
@@ -1120,6 +1165,15 @@ export class CliTuiApp {
       detailed: this.#detailedTranscript,
       theme: this.#transcriptTheme,
     });
+  }
+
+  #overlayViewportHeight(
+    height: number | undefined,
+    footerLineCount: number,
+    inputLineCount: number,
+  ): number | undefined {
+    if (height === undefined) return undefined;
+    return Math.max(6, height - footerLineCount - inputLineCount - 4);
   }
 
   #renderPanel(width: number, height?: number): string[] {
@@ -1237,7 +1291,7 @@ export class CliTuiApp {
       ...(selected ? selected.detailLines.flatMap((line) => wrapText(line, Math.max(20, width - 4))) : []),
       "Use Up/Down or 1/2/3, then Enter. Esc denies.",
     ];
-    const maxLines = Math.max(6, (height ?? this.#terminal.size.rows) - 4);
+    const maxLines = Math.max(6, (height ?? this.#terminal.size.rows) - 2);
     return new Box(new StaticLines(lines.slice(0, maxLines)), "approval").render(width);
   }
 
@@ -1254,7 +1308,7 @@ export class CliTuiApp {
   }
 }
 
-class CliTuiScreen implements Component {
+class CliTuiScreen implements InlineFrameComponent {
   readonly #app: CliTuiApp;
 
   constructor(app: CliTuiApp) {
@@ -1269,6 +1323,10 @@ class CliTuiScreen implements Component {
 
   render(width: number, height?: number): string[] {
     return this.#app.render(width, height);
+  }
+
+  prepareFrame(width: number, height: number | undefined, options: { readonly full: boolean }): PreparedRenderFrame {
+    return this.#app.prepareFrame(width, height, options);
   }
 }
 

@@ -83,4 +83,31 @@ describe("ConversationViewModel", () => {
     expect(block?.state).toBe("complete");
     expect(block?.revision).toBe(revision);
   });
+
+  it("commits only a consecutive completed prefix", () => {
+    const view = new ConversationViewModel();
+    const toolCall = { id: "tool-1", name: "read-file", input: { path: "README.md" } };
+    view.startAssistantMessage("assistant-1");
+    view.updateAssistantMessage("assistant-1", "still streaming");
+    view.startToolMessage("tool-1", toolCall);
+    view.finishToolMessage("tool-1", toolCall, {
+      toolCallId: "tool-1",
+      name: "read-file",
+      output: "done",
+      isError: false,
+    });
+
+    const blocked = view.prepareRender(80, {}, { full: false });
+    expect(blocked.commitPrefixLineCount).toBe(0);
+    blocked.commit();
+    expect(view.committedBlockCount).toBe(0);
+    expect(view.activeBlockCount).toBe(2);
+
+    view.finishAssistantMessage("assistant-1", "finished");
+    const ready = view.prepareRender(80, {}, { full: false });
+    expect(ready.commitPrefixLineCount).toBeGreaterThan(0);
+    ready.commit();
+    expect(view.committedBlockCount).toBe(2);
+    expect(view.activeBlockCount).toBe(0);
+  });
 });

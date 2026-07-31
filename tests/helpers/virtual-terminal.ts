@@ -54,22 +54,19 @@ export function createVirtualTerminal(options: {
   let rows = options.rows ?? 24;
   let pending = Promise.resolve();
 
-  const output = Object.assign(outputEmitter, {
-    isTTY: true,
-    get columns() {
-      return columns;
-    },
-    get rows() {
-      return rows;
-    },
-    write(chunk: string) {
+  const output = outputEmitter as unknown as NodeJS.WriteStream;
+  Object.defineProperties(output, {
+    isTTY: { value: true },
+    columns: { get: () => columns },
+    rows: { get: () => rows },
+    write: { value: (chunk: string) => {
       writes.push(String(chunk));
       pending = pending.then(() => new Promise<void>((resolve) => {
         screen.write(chunk, resolve);
       }));
       return true;
-    },
-  }) as unknown as NodeJS.WriteStream;
+    } },
+  });
 
   const input = Object.assign(inputEmitter, {
     isTTY: true,

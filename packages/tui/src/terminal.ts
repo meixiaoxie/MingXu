@@ -1,7 +1,6 @@
 import { emitKeypressEvents } from "node:readline";
 
-import { CURSOR_MARKER } from "./types.js";
-import { visibleWidth } from "./strings.js";
+import { DifferentialRenderer, type DifferentialRenderStats, type FullReplayReason } from "./differential-renderer.js";
 
 const BRACKETED_PASTE_START = "\x1b[200~";
 const BRACKETED_PASTE_END = "\x1b[201~";
@@ -20,9 +19,7 @@ export class ProcessTerminal {
   readonly #output: NodeJS.WriteStream;
   readonly #resizeListeners = new Set<() => void>();
   readonly #keyListeners = new Set<TerminalKeyListener>();
-  #lastFrame: readonly string[] = [];
-  #lastWidth = 0;
-  #hasRendered = false;
+  readonly #renderer = new DifferentialRenderer();
   #rawMode = false;
   #bracketedPaste = false;
   #pasteBuffer: string | undefined;
@@ -143,52 +140,34 @@ export class ProcessTerminal {
     this.#output.write("\r\x1b[0J");
   }
 
-  render(lines: readonly string[], options: { readonly full?: boolean } = {}): void {
+  get renderStats(): DifferentialRenderStats {
+    return this.#renderer.stats;
+  }
+
+  render(
+    lines: readonly string[],
+    options: {
+      readonly full?: boolean;
+      readonly fullReason?: FullReplayReason;
+      readonly commitPrefixLineCount?: number;
+    } = {},
+  ): { readonly requiresFullReplay: boolean; readonly replayReason?: FullReplayReason; readonly stats: DifferentialRenderStats } {
     if (!this.isTTY) {
       this.#output.write(`${lines.join("\n")}\n`);
-      return;
+      return { requiresFullReplay: false, stats: this.#renderer.stats };
     }
 
-    const rendered = [...lines];
-    const cursorPosition = extractCursorPosition(rendered);
-    const width = this.size.columns;
-    const forceFull = options.full === true || !this.#hasRendered || this.#lastWidth !== width;
-    const frame: string[] = ["\x1b[?2026h", "\x1b[?25l"];
-    const moveCursor = (row: number, column: number): void => {
-      frame.push(`\x1b[${Math.max(0, row + 1)};${Math.max(0, column + 1)}H`);
-    };
-
-    if (forceFull) {
-      frame.push("\x1b[2J\x1b[H", rendered.join("\r\n"));
-    } else {
-      const prefix = commonPrefix(this.#lastFrame, rendered);
-      const suffix = commonSuffix(this.#lastFrame, rendered, prefix);
-      if (prefix === 0 && rendered.length === 0) {
-        frame.push("\x1b[H\x1b[2J");
-      } else if (rendered.length !== this.#lastFrame.length || prefix !== rendered.length) {
-        moveCursor(prefix, 0);
-        for (let row = prefix; row < rendered.length - suffix; row += 1) {
-          if (row > prefix) {
-            frame.push("\r\n");
-          }
-          frame.push("\x1b[2K\r", rendered[row] ?? "");
-        }
-        if (rendered.length < this.#lastFrame.length) {
-          frame.push("\x1b[0J");
-        }
-      }
+    const result = this.#renderer.render(lines, this.size, options);
+    if (result.requiresFullReplay) {
+      return {
+        requiresFullReplay: true,
+        ...(result.replayReason ? { replayReason: result.replayReason } : {}),
+        stats: result.stats,
+      };
     }
-
-    if (cursorPosition) {
-      moveCursor(cursorPosition.row, cursorPosition.column);
-    } else if (rendered.length > 0) {
-      moveCursor(Math.max(0, rendered.length - 1), visibleWidth(rendered.at(-1) ?? ""));
-    }
-    frame.push("\x1b[?25h", "\x1b[?2026l");
-    this.#output.write(frame.join(""));
-    this.#lastFrame = rendered;
-    this.#lastWidth = width;
-    this.#hasRendered = true;
+    if (result.output) this.#output.write(result.output);
+    result.commit();
+    return { requiresFullReplay: false, stats: result.stats };
   }
 
   moveCursorTo(row: number, column: number): void {
@@ -210,43 +189,4 @@ export class ProcessTerminal {
       listener(input);
     }
   }
-}
-
-function extractCursorPosition(lines: string[]): { row: number; column: number } | undefined {
-  for (let row = 0; row < lines.length; row += 1) {
-    const line = lines[row];
-    if (line === undefined) {
-      continue;
-    }
-    const markerIndex = line.indexOf(CURSOR_MARKER);
-    if (markerIndex === -1) {
-      continue;
-    }
-    lines[row] = line.replace(CURSOR_MARKER, "");
-    const column = visibleWidth(line.slice(0, markerIndex));
-    return { row, column };
-  }
-  return undefined;
-}
-
-function commonPrefix(left: readonly string[], right: readonly string[]): number {
-  const limit = Math.min(left.length, right.length);
-  let index = 0;
-  while (index < limit && left[index] === right[index]) {
-    index += 1;
-  }
-  return index;
-}
-
-function commonSuffix(left: readonly string[], right: readonly string[], prefix: number): number {
-  let suffix = 0;
-  const leftLimit = left.length - prefix;
-  const rightLimit = right.length - prefix;
-  while (suffix < leftLimit && suffix < rightLimit) {
-    if (left[left.length - 1 - suffix] !== right[right.length - 1 - suffix]) {
-      break;
-    }
-    suffix += 1;
-  }
-  return suffix;
 }

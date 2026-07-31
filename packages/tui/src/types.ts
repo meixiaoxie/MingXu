@@ -12,6 +12,20 @@ export interface Component {
   invalidate(): void;
 }
 
+export interface PreparedRenderFrame {
+  readonly lines: string[];
+  readonly commitPrefixLineCount?: number;
+  commit?(): void;
+}
+
+export interface InlineFrameComponent extends Component {
+  prepareFrame(
+    width: number,
+    height: number | undefined,
+    options: { readonly full: boolean },
+  ): PreparedRenderFrame;
+}
+
 export type ComponentAction =
   | { type: "submit"; value: string }
   | { type: "cancel" }

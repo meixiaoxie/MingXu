@@ -26,10 +26,17 @@ export interface ConversationRenderOptions {
   readonly theme?: TranscriptTheme;
 }
 
+export interface PreparedConversationRender {
+  readonly lines: string[];
+  readonly commitPrefixLineCount: number;
+  commit(): void;
+}
+
 export class ConversationViewModel {
   readonly #blocks: ConversationBlock[] = [];
   readonly #blockIndex = new Map<string, ConversationBlock>();
   #emptyHint: readonly string[] = [];
+  #committedBlockCount = 0;
 
   setEmptyHint(lines: readonly string[]): void {
     this.#emptyHint = lines.map((line) => sanitizeTerminalText(line));
@@ -38,6 +45,7 @@ export class ConversationViewModel {
   clear(): void {
     this.#blocks.length = 0;
     this.#blockIndex.clear();
+    this.#committedBlockCount = 0;
   }
 
   hasBlock(id: string): boolean {
@@ -205,32 +213,55 @@ export class ConversationViewModel {
   }
 
   render(width: number, options: ConversationRenderOptions = {}): string[] {
-    const detailed = options.detailed === true;
-    const maxBlocks = options.maxBlocks ?? 999;
-    const theme = options.theme;
-    const blocks = this.#blocks.slice(-maxBlocks);
-    if (blocks.length === 0) {
+    if (this.#blocks.length === 0) {
       return [...this.#emptyHint];
     }
+    const startIndex = Math.max(0, this.#blocks.length - (options.maxBlocks ?? Number.POSITIVE_INFINITY));
+    return flattenRenderedBlocks(this.#renderBlockGroups(startIndex, width, options)).lines;
+  }
 
-    const lines: string[] = [];
-    for (const block of blocks) {
-      const rendered = detailed
-        ? this.#renderDetailedBlock(block, width, theme)
-        : this.#renderCompactOrDetailedBlock(block, width, theme);
-      if (rendered.length === 0) {
-        continue;
-      }
-      lines.push(...rendered, "");
+  prepareRender(
+    width: number,
+    options: ConversationRenderOptions = {},
+    frameOptions: { readonly full: boolean },
+  ): PreparedConversationRender {
+    if (this.#blocks.length === 0) {
+      return { lines: [...this.#emptyHint], commitPrefixLineCount: 0, commit: () => undefined };
     }
-    if (lines.length > 0 && lines[lines.length - 1] === "") {
-      lines.pop();
+
+    let commitTarget = this.#committedBlockCount;
+    while (commitTarget < this.#blocks.length && isCommittable(this.#blocks[commitTarget])) {
+      commitTarget += 1;
     }
-    return lines;
+
+    const requestedStart = frameOptions.full ? 0 : this.#committedBlockCount;
+    const startIndex = Math.max(
+      requestedStart,
+      this.#blocks.length - (options.maxBlocks ?? Number.POSITIVE_INFINITY),
+    );
+    const flattened = flattenRenderedBlocks(this.#renderBlockGroups(startIndex, width, options), commitTarget);
+    let committed = false;
+    return {
+      lines: flattened.lines,
+      commitPrefixLineCount: flattened.commitPrefixLineCount,
+      commit: () => {
+        if (committed) return;
+        committed = true;
+        this.#committedBlockCount = Math.max(this.#committedBlockCount, commitTarget);
+      },
+    };
   }
 
   get blocks(): readonly ConversationBlock[] {
     return this.#blocks;
+  }
+
+  get committedBlockCount(): number {
+    return this.#committedBlockCount;
+  }
+
+  get activeBlockCount(): number {
+    return this.#blocks.length - this.#committedBlockCount;
   }
 
   #upsertBlock(
@@ -261,6 +292,24 @@ export class ConversationViewModel {
     this.#blocks.push(block);
     this.#blockIndex.set(id, block);
     return block;
+  }
+
+  #renderBlockGroups(
+    startIndex: number,
+    width: number,
+    options: ConversationRenderOptions,
+  ): RenderedBlockGroup[] {
+    const detailed = options.detailed === true;
+    const groups: RenderedBlockGroup[] = [];
+    for (let index = startIndex; index < this.#blocks.length; index += 1) {
+      const block = this.#blocks[index];
+      if (!block) continue;
+      const lines = detailed
+        ? this.#renderDetailedBlock(block, width, options.theme)
+        : this.#renderCompactOrDetailedBlock(block, width, options.theme);
+      if (lines.length > 0) groups.push({ blockIndex: index, lines });
+    }
+    return groups;
   }
 
   #messageLines(text: string): string[] {
@@ -389,6 +438,34 @@ export class ConversationViewModel {
         return "accent";
     }
   }
+}
+
+interface RenderedBlockGroup {
+  readonly blockIndex: number;
+  readonly lines: readonly string[];
+}
+
+function flattenRenderedBlocks(
+  groups: readonly RenderedBlockGroup[],
+  commitTarget = 0,
+): { readonly lines: string[]; readonly commitPrefixLineCount: number } {
+  const lines: string[] = [];
+  let commitPrefixLineCount = 0;
+  for (let index = 0; index < groups.length; index += 1) {
+    const group = groups[index];
+    if (!group) continue;
+    lines.push(...group.lines);
+    const nextGroup = groups[index + 1];
+    if (nextGroup) lines.push("");
+    if (group.blockIndex < commitTarget) {
+      commitPrefixLineCount = lines.length;
+    }
+  }
+  return { lines, commitPrefixLineCount };
+}
+
+function isCommittable(block: ConversationBlock | undefined): boolean {
+  return block !== undefined && block.state !== "streaming" && block.live !== true;
 }
 
 function sameConversationPatch(

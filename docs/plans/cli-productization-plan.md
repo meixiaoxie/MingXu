@@ -1,330 +1,298 @@
-﻿# MingXu 成品 CLI 收口计划
+# MingXu 成品 CLI 剩余收口计划
 
 ## 1. 文档目的
 
-本文档定义 MingXu 从“核心运行时可用、TUI 原型可运行”走向“可长期日常使用的成品 CLI”所需的完整工作。
+本文档只记录截至 2026-07-31 尚未完成的 CLI 产品化工作。已经落库并通过现有自动化测试的阶段历史不再重复，具体变更以 Git 提交记录为准。
 
-对标 Codex CLI、Claude CLI 和 pi-mono，指的是终端交互质量、稳定性和信息组织达到同一成熟度，不复制它们的品牌、颜色、文案、源码或产品定位。
+当前状态仍是：MingXu 已具备可运行的 Agent 核心、CLI 主链、TUI 产品原型、真实 coding-tools 插件和安装烟测，但尚未达到“可长期日常使用的成品 CLI”标准。
 
-MingXu 仍然是通用 Agent 大脑：Core 负责推理、上下文、Session、治理、调度和扩展宿主；文件、命令、搜索、PDF、浏览器、Git 和数据库继续通过 Plugin 或 MCP 接入。
+只有第 14 节全部通过后，才能把成品 CLI 标记为完成。
 
-## 2. 当前基线
+## 2. 保持不变的边界
 
-### 2.1 已经具备
+- `@mingxu/core` 继续负责推理、上下文、Session、治理、调度和扩展宿主，不依赖 CLI 或 TUI。
+- `@mingxu/tui` 是唯一终端 UI 实现，不依赖 Core、CLI 或插件实现。
+- `@mingxu/cli` 是产品适配层，负责把运行时事件投影为 ViewModel 并驱动 TUI。
+- Core 默认不提供文件、命令、浏览器、搜索、PDF、Git 或数据库工具，这些能力继续通过 Plugin 或 MCP 接入。
+- 保持现有公共导出、CLI 参数、非 TTY stdout/stderr、Session 和扩展协议兼容，除非对应工作包明确要求迁移。
+- 不直接编辑生成的 `dist/`。
+- 插件市场、远程自动更新、多工作区标签页、后台守护任务、分布式 Subagent 和 OS 级插件沙箱不在本计划范围内。
 
-- Provider、流式模型执行、AgentSession、Session 恢复和上下文压缩主链。
-- Policy、Approval、Audit、Budget、Abort、Secret reference 和项目 Trust。
-- MCP、Memory、Resource、Skill、Preset、Subagent 和本地扩展治理入口。
-- `chat`、`--prompt`、`resume`、`--continue`、`sessions`、`doctor` 和 `init`。
-- OpenAI-compatible、DeepSeek、Anthropic 和 Gemini 的统一模型事件转换。
-- 独立的 `@mingxu/tui` 包，以及基础 Terminal、Editor、Box、SelectList、Tree、Table、Diff 和 Progress 组件。
-- 基于稳定消息 ID 的基础 ConversationViewModel，流式更新不再按 token 追加新消息。
-- `/extensions`、`/context`、`/agents`、`/audit`、`/trust`、`/preset`、`/compact` 和 `/steer` 面板入口。
-- Windows `mingxu.cmd`、非 TTY 纯文本模式和打包烟测基础。
+## 3. 剩余工作总览
 
-### 2.2 当前不足
+| 工作包 | 优先级 | 目标 | 前置依赖 | 状态 |
+| --- | --- | --- | --- | --- |
+| R1 终端渲染与真实 scrollback | P0 | 完成历史/活动区域分离和成熟差分渲染包装 | 无 | 已完成（2026-07-31） |
+| R2 终端生命周期与异常恢复 | P0 | 所有退出和降级路径对称恢复终端 | 可与 R1 并行 | 待完成 |
+| R3 IME、选择区与输入边界 | P0 | 完成真实中文输入法和选择编辑体验 | R1 的 viewport 协议 | 待完成 |
+| R4 产品组件与复杂面板 | P1 | 完成 Markdown、Diff、CommandBlock 和面板交互 | R1、R3 | 待完成 |
+| R5 CLI 职责拆分与 Session replay | P0 | 完成运行适配、命令、屏幕和回放边界 | 稳定事件投影 | 待完成 |
+| R6 coding-tools 两阶段写入 | P0 | 写入前预览，审批后原子提交 | R4、R5 | 待完成 |
+| R7 发布级压力与跨平台验收 | P0 | 用真实产物和三平台结果关闭发布门槛 | R1-R6 | 待完成 |
 
-- `@mingxu/tui` 已有逐行差分、同步输出和刷新合并，但仍是自研渲染器，尚未接入并固定计划中的成熟上游能力。
-- Transcript 尚未真正分成已提交的普通终端 scrollback 与可重绘活动区域，长历史仍会参与 ViewModel 渲染。
-- raw mode、光标和 bracketed paste 已对称恢复，但 SIGTERM、SIGHUP、未捕获异常和降级终端的恢复矩阵不完整。
-- Editor 已按 grapheme cluster 处理移动和删除，并支持多行、历史、粘贴和撤销/重做；选择区、IME composition 和跨终端输入边界仍不完整。
-- Overlay 栈和主要产品面板已经可用，但 Agent 节点/子树取消、复杂焦点恢复和窄终端交互仍需收口。
-- Markdown、Diff、Table、Tree 和 Progress 仍是基础实现，CommandBlock 尚未完成。
-- 事件幂等投影已经从 `CliTuiApp` 抽出，但 RuntimeAdapter、CommandController 和 ProductScreen 的职责拆分尚未完成。
-- `coding-tools` 已具备真实工具和扩展生命周期；write/edit 仍需改为写入前 Diff 预览、审批后提交的两阶段协议。`web-search` 仍是后续骨架。
-- xterm/headless 和真实 tarball 全局安装已经进入测试，三平台 CI 门禁已经配置；仍需等待三平台实际结果，并补齐并发工具、进程信号、无效字节和长会话指标。
+## 4. R1：终端渲染与真实 scrollback
 
-### 2.3 当前成熟度判断
+### 目标
 
-| 领域 | 当前估计 | 成品目标 |
-| --- | ---: | ---: |
-| Agent 核心运行时 | 80%～85% | 95% |
-| 非交互 CLI 与 Session | 75%～80% | 95% |
-| 扩展安装与治理 | 65%～70% | 90% |
-| TUI 架构 | 55%～60% | 95% |
-| TUI 视觉和交互手感 | 35%～45% | 90% |
-| 跨终端发布验证 | 40%～50% | 95% |
+完成消息只写入普通终端 scrollback 一次，只有活动 assistant、工具、队列、composer、footer 和 Overlay 参与后续重绘。长历史不能继续作为活动组件反复排版。
 
-这些百分比只用于排定优先级，不作为验收依据。最终完成状态只由本文后面的测试和发布门槛决定。
+### 实施项
 
-## 3. 成品定义
+- 选择并固定成熟差分渲染能力，封装在 `@mingxu/tui` 内部，CLI 不接触上游 API。
+- 记录上游精确版本、许可证、必须携带的辅助文件、本地修改和升级策略。
+- 定义 `CommittedTranscript` 与 `ActiveRegion` 协议，明确消息从活动状态固化到 scrollback 的唯一时机。
+- `message_end`、工具完成和审批结果只能提交一次；重复、滞后或回放事件不能重复写入历史。
+- 普通 delta 只使对应活动 block 及受影响布局失效，不重新渲染已提交历史。
+- resize 时只重排活动区域；无法恢复时才允许完整重绘，并记录诊断原因。
+- `Ctrl+L` 保留为显式完整重绘入口。普通刷新不得出现 `ESC[2J`。
+- 保持同步输出、单帧单次写入、最高约 30 FPS 合并和 p95 小于 100 ms 的现有门槛。
+- 1,000 条历史消息不得全部保留为活动渲染组件，内存增长需要有可解释上限。
 
-MingXu CLI 同时满足以下条件时，才可以称为成品：
+### 特征测试
 
-1. 用户可以在 Windows、Linux 和 macOS 的常见终端中稳定启动、聊天、中止、退出和恢复会话。
-2. 长流式响应只更新当前 assistant block，不重复、不整屏闪烁、不破坏历史 scrollback。
-3. 用户消息、assistant 正文、工具、审批、错误和状态有明确但克制的信息层级。
-4. 输入框在生成期间保持可用，Follow-up 和 Steering 行为可预测。
-5. `/` 菜单、选择器和 Overlay 具有统一焦点、滚动、关闭和恢复规则。
-6. 非 TTY、管道、重定向和 `--prompt` 保持稳定、可解析的纯文本契约。
-7. Core 默认没有外部工具，但用户可以安装一个真实插件完成“安装、检查、启用、审批、执行、停用、卸载”闭环。
-8. 模型、工具和插件输出不能通过 ANSI、OSC 或控制字符操纵终端。
-9. 所有异常退出路径恢复 raw mode、光标、bracketed paste 和同步输出状态。
-10. 发布验收链在真实安装产物上通过，不能以跳过代替成功。
+- 200 个及以上流式分块只更新一个 assistant block，不重复正文。
+- 1,000 条历史消息后继续流式输出，验证活动组件数量、重绘行数和内存。
+- 60x20、80x24、120x40 下验证提交、resize、长行、宽字符和 scrollback。
+- Overlay 打开和关闭期间，已提交历史不被覆盖或重新输出。
+- 普通 delta 的输出中不包含 `ESC[2J`，重绘行数只覆盖受影响活动区域。
 
-## 4. 产品与技术边界
+### 验收
 
-### 4.1 本阶段包含
+- 用户可以使用终端原生滚动条回看完整对话。
+- 完成 block 的终端字节只提交一次。
+- 1,000 条历史消息不会导致每次 delta 全历史重排。
+- 普通流式更新最高约 30 FPS，95% delta 在 100 ms 内进入终端输出。
 
-- Inline scrollback TUI，不进入 alternate screen。
-- 差分渲染、稳定活动区域、主题、语义块和 Overlay 栈。
-- ConversationViewModel、输入系统、审批、扩展中心、上下文检查器和任务树。
-- Windows、非 TTY、resume、continue 和异常恢复收口。
-- 一个真实可用的官方参考插件，用于验证扩展治理协议。
-- 完整终端测试、真实 tarball 安装和发布文档。
+### 完成状态
 
-### 4.2 本阶段不包含
+R1 已于 2026-07-31 完成，后续工作包仍按本计划独立验收：
 
-- 插件市场、推荐系统和远程自动更新。
-- 默认内置文件、命令、浏览器、搜索、PDF、Git 或数据库能力。
-- 任意插件自定义 TUI 组件。
-- 多工作区标签页、后台守护任务和分布式 Subagent。
-- OS 或容器级插件沙箱。
-- 像素级复制 Codex、Claude 或 pi-mono。
+- `@mingxu/tui` 已固定包装 pi-tui `0.82.1`、pi-mono commit `2efa728d2ee90ef597626e96b1e28ef2b279f07c` 的 viewport 差分渲染思路，并在源码、根目录及 TUI 包内记录 MIT 来源、裁剪边界和升级策略。
+- `PreparedRenderFrame` 将终端写入与 committed 前缀推进绑定；普通帧只保留活动区域，完整回放仍保留全部 block 索引。
+- 连续完成前缀、重复/滞后事件、Overlay 往返、普通 delta、60x20/80x24/120x40、仅高度 resize、1,000 条历史和 200 分块性能门槛均已有自动化覆盖。
+- R1 聚焦测试共 5 个文件、14 个用例通过；`pnpm typecheck`、`pnpm test`（55 个文件、244 个用例）和 `pnpm build` 通过。
+- 本状态不包含 R2 的信号、异常退出、EPIPE 或完整终端生命周期恢复工作，也不代表成品 CLI 已完成。
 
-## 5. 目标架构
+## 5. R2：终端生命周期与异常恢复
+
+### 目标
+
+任何正常、异常或信号退出路径都恢复 raw mode、光标、bracketed paste、同步输出和进程监听器；能力不足的终端自动降级而不是挂起或崩溃。
+
+### 实施项
+
+- 在 `@mingxu/tui` 建立单一 `TerminalLifecycle` 所有权，进入和恢复操作必须幂等。
+- 明确 Windows VT、raw mode、同步输出和 bracketed paste 的能力探测与降级顺序。
+- 覆盖正常退出、Ctrl+C、Ctrl+D、Provider 错误、插件错误、SIGINT、SIGTERM、SIGHUP、未捕获异常和未处理 Promise rejection。
+- 处理初始化只完成一半、重复 shutdown、stdout/stderr EPIPE 和 resize 期间退出。
+- 进程信号监听器必须在 Session 结束后移除，不能跨多次交互运行泄漏。
+- 降级模式不得输出不受支持的控制序列，也不得永久等待输入。
+
+### 特征测试
+
+- 使用子进程和 headless terminal 验证每种退出路径的最终控制序列。
+- 模拟 `setRawMode`、同步输出或 resize 不可用以及初始化中途抛错。
+- 连续启动和关闭多个交互 Session，检查监听器数量不增长。
+- 在 stdout 和 stderr 分别断管时验证退出码和恢复顺序。
+
+### 验收
+
+- 所有退出路径都恢复终端并清理监听器。
+- 恢复逻辑多次调用不会抛错或重复破坏终端状态。
+- `TERM=dumb`、非 TTY 和缺少 raw mode 时有稳定、可测试的降级行为。
+
+## 6. R3：IME、选择区与输入边界
+
+### 目标
+
+补齐现有 grapheme、多行、历史、粘贴和撤销/重做之上的真实输入法与选择编辑能力。
+
+### 实施项
+
+- 为 Editor 增加基于 grapheme cluster 的 anchor/focus 选择模型。
+- 选择、替换、Backspace、Delete、Home、End、撤销和重做不得拆分组合字符或 emoji。
+- 明确 IME composition 期间的临时文本、提交文本和光标显示规则，composition 未提交时不得触发命令或提交 prompt。
+- 验证中文、日文、韩文输入法以及组合音标、ZWJ emoji 和宽字符列换算。
+- 对无法区分 Shift+Enter 的终端提供一致的换行替代路径和简短提示。
+- bracketed paste 与 selection、undo/redo、slash completion 共同使用时保持单次编辑事务。
+
+### 特征测试
+
+- selection 跨视觉行、宽字符和组合字符的移动、替换、删除、撤销与重做。
+- composition start/update/commit/cancel 的状态转换，不把中间态写入命令菜单或 transcript。
+- 60、80、120 列和 resize 后的选择高亮、逻辑光标与显示列。
+- Windows Terminal、PowerShell、cmd、常见 Unix terminal 的真实输入样本。
+
+### 验收
+
+- IME composition 不产生半字符、重复字符或意外提交。
+- 选择区操作始终按 grapheme 边界执行。
+- resize、历史切换和 Overlay 往返后草稿、选择和光标位置保持一致。
+
+## 7. R4：产品组件与复杂面板
+
+### 目标
+
+把仍处于基础实现的展示组件和面板收口为宽度感知、可折叠、可滚动且安全的产品组件。
+
+### 实施项
+
+- Markdown 使用稳定解析器支持标题、列表、引用、代码块、行内代码、链接和基本表格。
+- Diff 支持文件头、行号、增删状态、折叠、超长行截断和 no-color 表达。
+- 新增 CommandBlock，支持实时 stdout/stderr、运行状态、退出码、信号、耗时、截断、折叠和取消摘要。
+- 完善 Table、Tree、KeyValue 和 Progress 的宽度分配、窄终端降级和控制字符净化。
+- 所有外部文本继续统一阻断 ANSI、OSC 8、OSC 52、DCS、C0 控制字符、无效 Unicode 和二进制样式输出。
+- Agent Tree 支持取消单个节点或子树，并显示确认、结果和失败原因。
+- Overlay 嵌套、筛选、resize 和关闭后必须恢复 composer 草稿、选择、光标和原焦点。
+- 高度不足时只滚动面板 viewport，composer 始终可见。
+
+### 特征测试
+
+- 超长 Markdown、Diff、Command 输出、无空格长文本和恶意控制序列。
+- 多个并发工具的运行、完成、失败、取消和乱序更新。
+- Overlay 多层 push/pop、Approval 抢占、resize 和焦点恢复。
+- Agent 节点与子树取消的成功、拒绝、竞态和恢复路径。
+
+### 验收
+
+- 60 列紧凑模式下组件不重叠，composer 始终可见。
+- 工具和命令输出不会混入 assistant 正文或操纵终端。
+- 任意时刻只有栈顶 Overlay 接收输入，关闭后完整恢复编辑状态。
+
+## 8. R5：CLI 职责拆分与 Session replay
+
+### 目标
+
+让显示继续作为运行时事件的幂等投影，同时移除 `CliTuiApp` 中过多的产品适配、命令处理和渲染职责。
+
+### 实施项
+
+- 建立 `RuntimeAdapter`，只负责订阅 Core/Session、规范化事件和暴露产品所需命令。
+- 建立 `CommandController`，统一命令注册、解析、dispatch、错误和异步结果。
+- 建立 `ProductScreen`，只消费 ViewModel、Overlay 状态和主题，不直接调用 Core。
+- `CliTuiApp` 只负责生命周期编排和依赖连接，不再包含具体产品面板业务。
+- PresentationBlock 按 `id + revision` 幂等更新，并与 ToolCall、assistant 正文和运行状态相互独立。
+- Session resume 从持久化记录重建消息、工具摘要、审批摘要、PresentationBlock 和扩展快照。
+- replay 不依赖历史屏幕输出，不重新执行工具，也不把短旧内容覆盖到新内容。
+- 无法恢复的乱序或损坏记录进入诊断通道，不污染 stdout 或 transcript。
+
+### 特征测试
+
+- 同一事件序列经实时订阅和 Session replay 得到相同 ViewModel。
+- 重复、滞后、缺失和损坏事件的恢复或拒绝策略。
+- PresentationBlock revision、工具状态和 assistant 正文互不覆盖。
+- CommandController 的注册表、help、completion 和 dispatch 完全一致。
+- 拆分前后的非 TTY stdout/stderr、resume 和 continue 契约保持不变。
+
+### 验收
+
+- `CliTuiApp` 不再拥有具体命令和面板业务。
+- 实时运行与 resume 重建得到同样的可见顺序和摘要。
+- Provider、工具或插件错误后可以继续下一轮，且不会产生重复 block。
+
+## 9. R6：coding-tools 两阶段写入
+
+### 目标
+
+write/edit 在任何文件副作用发生前生成可审阅 Diff，经 Policy 和 Approval 允许后才原子提交，并完整记录 Audit 与 Session 摘要。
+
+### 协议设计要求
+
+- 在 plugin SDK 中定义向后兼容的 prepare/commit 协议；现有单阶段只读工具不受影响。
+- prepare 阶段解析 workspace realpath、规范化目标、读取基线并返回 DiffBlock、内容摘要和不可伪造的变更指纹。
+- Approval 必须绑定 principal、Session、工具、规范化目标、基线哈希、目标内容哈希和变更指纹。
+- commit 前重新检查 realpath、符号链接、网络路径和基线哈希，发现 TOCTOU 或内容漂移时拒绝写入并要求重新预览。
+- commit 使用同目录临时文件和原子替换；失败或 Abort 时清理临时文件并保留原文件。
+- Audit 记录 prepare、Policy 决定、Approval 决定、commit、拒绝和失败；不得记录 secret 或无上限全文。
+- Session 只保存稳定摘要、Diff 引用、决定和最终结果，不保存可重新执行的隐式副作用。
+
+### 特征测试
+
+- 未审批、拒绝、审批超时和 Abort 时文件保持不变。
+- prepare 与 commit 之间文件变化、符号链接替换、workspace 移动和权限变化。
+- allow once、allow for session 和 principal 隔离。
+- 原子写入失败、临时文件清理和重试。
+- 安装、启用、执行、停用、卸载后 ToolRegistry、Audit 和 Session 的一致性。
+
+### 验收
+
+- Diff 在副作用前可见，审批绑定的正是最终提交内容。
+- 任何基线或路径变化都会使旧审批失效。
+- 停用或卸载后工具立即不可用，已存在 Session 仍可继续。
+
+## 10. R7：发布级压力与跨平台验收
+
+### 目标
+
+只有真实 tarball、真实平台结果和完整压力门槛同时通过，才能关闭成品 CLI 计划。
+
+### 自动化矩阵
+
+- Windows、Linux、macOS 均运行 Node 22 和当前受支持的最新 Node 版本的 typecheck、test 和 build。
+- 三个平台均从临时目录通过包管理器全局安装真实 tarball，运行 `--help`、`--version`、`init`、`chat`、`resume`、`--continue`、`doctor` 和扩展闭环。
+- Windows 增加从 `C:\Windows\System32` 启动 `mingxu.cmd` 的配置、Session 和 Audit 路径测试。
+- CI 和 release workflow 不允许 `continue-on-error`、平台跳过或用源码入口替代安装产物。
+- 发布 workflow 必须执行完整验收命令和生产依赖审计；实际 publish 仍需显式授权。
+
+### 压力与安全场景
+
+- 1,000 条历史消息、200 个以上流式分块和多个并发工具。
+- 超长 Markdown、Diff、Command 输出、无空格长文本和大段粘贴。
+- Provider 错误、插件错误、进程信号、EPIPE、resize 风暴和 Overlay 竞态。
+- ANSI、OSC 8、OSC 52、DCS、C0、无效 Unicode、孤立 surrogate 和二进制样式输出。
+- 非 TTY、管道、stdout/stderr 分别重定向、`TERM=dumb`、`NO_COLOR` 和 `--plain`。
+
+### 性能记录
+
+- 首屏时间。
+- delta 到终端输出延迟的 p50、p95 和最大值。
+- 每帧输出字节数、重绘行数和整屏重绘次数。
+- 1,000 条历史消息前后的活动组件数和进程内存。
+- resize 与 Overlay 打开/关闭耗时。
+
+### 实机记录
+
+- 保存 Windows Terminal、PowerShell、cmd 和至少一个 Unix terminal 的版本、终端尺寸、执行命令和结果摘要。
+- IME、resize、scrollback、信号恢复和安装路径至少各保留一个人工抽查记录。
+- CI 配置存在不等于三平台验收通过，必须引用实际成功运行结果。
+
+### 文档收口
+
+- README 删除 coding-tools 骨架期口径，明确真实能力和仍未实现的 web-search。
+- CHANGELOG 记录 CLI 行为、插件协议和安装门槛变化。
+- SECURITY 描述两阶段写入、插件宿主进程边界和控制字符防护。
+- development roadmap 与本计划保持同一状态，不提前宣称成品完成。
+
+## 11. 执行顺序
 
 ```text
-@mingxu/core
-  Runtime / AgentSession / Policy / Approval / Audit / Session / EventBus
-                         |
-                         v
-@mingxu/cli
-  RuntimeAdapter -> ConversationViewModel -> Product Components
-                         |
-                         v
-@mingxu/tui
-  Terminal / Renderer / Input / Overlay / Theme / Generic Components
-
-@mingxu/plugin-sdk <--- Plugin / MCP contributions ---> @mingxu/cli
+R1 渲染与 scrollback -----> R3 IME 与选择区 -----> R4 产品组件与面板
+          |                                          |
+          +-----> R2 生命周期恢复                    v
+                                             R6 两阶段写入
+R5 职责拆分与 replay -------------------------------+
+                                                     |
+                                                     v
+                                              R7 发布验收
 ```
 
-依赖规则：
+- R1、R2 可以并行，但终端生命周期所有权必须在两者合并前统一。
+- R5 可以与 R1-R3 并行，前提是不改变已冻结的非 TTY 和 Session 公共契约。
+- R4 完成稳定 DiffBlock/CommandBlock 后再实现 R6，避免 coding-tools 自定义展示协议。
+- R7 可以持续补测试，但只有 R1-R6 全部完成后才能执行最终发布判定。
 
-- `@mingxu/core` 不依赖 CLI 或 TUI。
-- `@mingxu/tui` 不依赖 Core、CLI 或插件实现。
-- `@mingxu/plugin-sdk` 只提供稳定协议和类型。
-- `@mingxu/cli` 是唯一产品适配层，负责把运行时事件投影为 ViewModel。
-- 插件只能返回 Tool、Resource、Skill 等标准贡献和 PresentationBlock，不能控制终端。
+## 12. 每个工作包的交付规则
 
-## 6. 实施阶段
+- 开始前检查并保护未提交修改，读取所属源码、测试和本计划。
+- 只修改当前工作包及其可靠测试所必需的边界，不提前实现后续工作包。
+- 运行最小相关测试和 `pnpm typecheck`。
+- 涉及共享 CLI、Session、Policy、插件或 TUI 行为时运行 `pnpm test`。
+- 涉及导出或打包时运行 `pnpm build`。
+- 涉及安装产物时运行 `pnpm test:smoke` 和 `pnpm pack:dry-run`。
+- 失败后保留复现和诊断，修复后重新运行同一检查。
+- 更新本计划的工作包状态和验收证据，但不得提前勾选最终完成定义。
 
-### 阶段 A：冻结基线和建立终端特征测试
-
-目标：在改写渲染器之前，固定现有公共行为，避免修 TUI 时破坏 Session、流式事件和非交互输出。
-
-工作项：
-
-- 为当前 `mingxu`、`chat`、`--prompt`、`resume`、`--continue` 建立字符级输出基线。
-- 固定 stdout 和 stderr 契约：assistant 正文进入 stdout，诊断、工具状态和错误进入 stderr。
-- 记录 TTY、非 TTY、`TERM=dumb`、`NO_COLOR` 和 stdout 重定向的分流矩阵。
-- 给 AgentMessage、ToolCall、PresentationBlock 和 Run 建立稳定 ID 测试。
-- 建立 200 个分块、重复事件、滞后事件和中止事件的回归用例。
-- 在改动开始前保存 Windows Terminal 与 PowerShell 的真实输出样本。
-
-验收：
-
-- 现有核心行为拥有自动化特征测试。
-- 测试可以稳定重现当前流式重复、光标或 scrollback 问题。
-- 后续阶段不能改变非交互 stdout 契约。
-
-### 阶段 B：终端引擎和 inline scrollback
-
-目标：建立不会闪屏、不会破坏历史记录、能够安全恢复的终端底座。
-
-工作项：
-
-- 在 `@mingxu/tui` 内封装固定版本的成熟差分渲染能力；CLI 不直接依赖上游 API。
-- 记录上游版本、MIT 许可证、修改点和必需辅助文件。
-- 将终端内容分成“已经提交到 scrollback 的历史区域”和“可重绘的活动区域”。
-- 完成消息只向终端提交一次，活动 assistant、队列、composer、footer 和 overlay 才参与重绘。
-- 删除普通刷新路径中的 `ESC[2J`；仅首次启动、resize 后无法恢复以及 `Ctrl+L` 时允许完整重绘。
-- 使用 synchronized output，按最高约 30 FPS 合并流式失效请求。
-- 普通 delta 只使活动 assistant block 失效，不能重新排版所有历史消息。
-- 实现 raw mode、光标、bracketed paste、Windows VT、resize 和进程信号的对称恢复。
-- 终端不支持同步输出或 raw mode 时自动降级，不能直接崩溃。
-
-验收：
-
-- 200 个流式分块不产生普通 `ESC[2J`。
-- 长对话可以使用终端原生滚动条回看，历史内容不会被活动区域覆盖。
-- resize 后 transcript、composer 和光标位置正确。
-- 正常退出、中止、Provider 异常和未捕获异常后终端状态均恢复。
-
-### 阶段 C：输入系统成品化
-
-目标：让中文、英文、emoji、多行、历史和补全在真实终端中稳定工作。
-
-工作项：
-
-- 光标移动、删除和选择统一按 grapheme cluster 处理。
-- 中文、组合字符、emoji 和宽字符使用一致的逻辑位置与显示列换算。
-- Up/Down 优先移动视觉行，到达首尾后才进入历史记录。
-- 支持多行输入、撤销/重做、Home/End、Ctrl+A/E 和安全粘贴。
-- Enter 提交，Shift+Enter/Ctrl+J 换行；无法识别 Shift+Enter 的终端显示可操作提示。
-- 实现 bracketed paste；大段粘贴先进入受保护状态，避免其中的换行被直接执行。
-- `/` 只在输入开头触发命令菜单；路径、普通正文中的 `/` 不触发。
-- Tab 完成当前候选，Esc 只关闭最上层菜单或 Overlay，不意外清空正文。
-- `Ctrl+C`：运行中中止；空闲且有草稿时清空；再次按下退出。
-- `Ctrl+D`：空输入二次确认退出；有输入保持删除语义。
-- `Ctrl+L` 强制重绘；`Ctrl+O` 切换详细模式。
-
-验收：
-
-- 中文、emoji、组合字符的插入、移动和删除没有半字符损坏。
-- 多行输入在 60、80、120 列下光标位置正确。
-- 粘贴多行命令不会自动逐行执行。
-- 生成期间可以继续输入并进入 Follow-up 或 Steering 队列。
-
-### 阶段 D：语义 Transcript 和视觉主题
-
-目标：把“日志输出”变成克制、可扫描、可长期阅读的产品界面。
-
-工作项：
-
-- 定义 `user`、`assistant`、`tool`、`status`、`error`、`approval-result` 六类稳定语义块。
-- 用户消息使用轻量背景或左侧强调；assistant 正文不使用大卡片和冗余标签。
-- 工具默认折叠为一行，等待审批、运行中、成功、失败和取消使用不同符号与文字。
-- 正常完成不显示独立 run result；usage 和 termination 默认进入详细模式。
-- 启动页眉只显示一次：MingXu、模型、工作目录和信任状态。
-- Footer 默认仅显示运行状态、当前模型和上下文余量。
-- 空会话显示两到三条简短建议，不显示调试式占位文字。
-- 建立 accent、text、muted、border、success、warning、error、user 和 tool 语义色。
-- 支持 dark、light 和 no-color；所有状态不能只依靠颜色表达。
-- Markdown 支持标题、列表、引用、代码块、行内代码、链接和基本表格。
-- Diff 支持文件头、行号、增删高亮、折叠和超长行安全截断。
-- CommandBlock 支持实时 stdout/stderr、运行状态、退出码、耗时、截断和折叠。
-- Table、Tree、KeyValue 和 Progress 使用宽度感知布局。
-
-验收：
-
-- 同一个 assistant 最终正文只出现一次。
-- 工具状态不会混入 assistant 正文。
-- 60 列进入紧凑模式且输入框始终可见。
-- `NO_COLOR`、`TERM=dumb` 和 `--plain` 不输出 ANSI。
-- 模型或插件输出中的 ANSI、OSC 8、OSC 52、DCS 和控制字符不能操纵终端。
-
-### 阶段 E：Overlay、命令和产品面板
-
-目标：让全部面板共享同一套焦点、选择、滚动和关闭规则。
-
-工作项：
-
-- 在 `@mingxu/tui` 实现真正的 OverlayHost 和 Overlay 栈。
-- 明确优先级：Approval > 阻塞错误 > 选择器/浏览面板 > 命令菜单。
-- Overlay 支持 viewport 内滚动、窄终端布局、焦点恢复和 resize。
-- 命令菜单、`/help` 和命令 dispatch 只读取同一个命令注册表。
-- 命令菜单显示 usage 和一句说明，不把候选写入 transcript。
-- 未知命令在 composer 附近显示临时错误，不污染会话正文。
-- `/model` 和 `/sessions` 提供可过滤选择器。
-- Approval 展示来源、权限、风险、规范化目标、参数摘要和 Policy 原因。
-- Approval 支持允许一次、当前 Session 允许、拒绝；关闭后 transcript 只保留一行摘要。
-- `/extensions` 展示版本、来源、Adapter、权限、完整性、健康和错误，并复用 Extension Service。
-- `/context` 展示五层 Instructions、Memory、Resource、Skill、消息预算和 compaction，不显示 secret。
-- `/agents` 展示父子任务树、Preset、模型、状态、耗时、预算、结果和错误，并支持取消节点或子树。
-- `/audit`、`/trust`、`/preset` 和 `/status` 使用统一面板外壳。
-
-验收：
-
-- 任意时刻只有栈顶 Overlay 接收输入。
-- Overlay 关闭后 composer 内容、光标和焦点恢复。
-- 所有注册命令在菜单、help 和 dispatch 中完全一致。
-- 高度不足时面板内部滚动，不能挤走 composer。
-
-### 阶段 F：ConversationViewModel 和运行事件收口
-
-目标：使所有显示成为运行时事件的幂等投影，彻底消除重复消息和日志式追加。
-
-工作项：
-
-- `CliTuiApp` 拆分为 RuntimeAdapter、ConversationViewModel、CommandController 和 ProductScreen。
-- Agent 事件携带 eventId、sequence、sessionId、runId、messageId、toolCallId 和 source。
-- `message_update` 采用累计内容更新同一个 block；短旧内容不能覆盖长新内容。
-- `message_end` 只固化已有 block，不能重新追加最终消息。
-- 用户提交和 runtime 回放只能有一个权威显示来源。
-- ToolCall 按 ID 原位更新，PresentationBlock 按 `id + revision` 更新。
-- 重复事件幂等忽略；允许的乱序事件短暂缓冲，无法恢复的事件记录诊断并拒绝投影。
-- Follow-up、Steering、usage、termination 和运行状态进入独立状态模型。
-- Session resume 从持久化记录重建同样的 ViewModel，不依赖屏幕输出反推状态。
-
-验收：
-
-- 重复、滞后和乱序事件不产生重复块。
-- 中止、Provider 错误和工具错误后仍能继续下一轮。
-- resume 后消息顺序、工具摘要和扩展快照一致。
-- 正文投影和详细状态投影相互独立。
-
-### 阶段 G：扩展闭环的真实样例
-
-目标：证明 MingXu 的“通用大脑 + 可选择手脚”能够完整落地。
-
-工作项：
-
-- 完成 `@mingxu/coding-tools` 最小真实实现：read、list、search、write、edit、command。
-- 该插件默认不安装、不启用，使用与第三方完全相同的 manifest、权限和生命周期。
-- 所有文件操作限制在 workspace realpath 内，拒绝越界、符号链接目标和网络路径。
-- write/edit 先生成 DiffBlock，经过 Policy 和 Approval 后才产生副作用。
-- command 仅接受 argv、受限 cwd、env allowlist、timeout、输出上限和 AbortSignal。
-- 完成从本地目录或 tarball 的 inspect、add、enable、healthCheck、disable 和 remove。
-- 扩展安装后默认 disabled；enable 才允许执行插件入口。
-- 扩展启停失败恢复 Registry、Session、配置和锁文件。
-- `web-search` 可以继续作为后续独立插件，不阻塞本批成品 CLI，但文档必须明确其未实现状态。
-
-验收：
-
-- 无扩展时 ToolRegistry 中不存在文件、命令或网络工具。
-- 安装并启用 coding-tools 后能力变化可见且进入 Audit。
-- 文件修改能够展示 Diff、请求审批、执行并在 Session 中留下摘要。
-- 停用或卸载后工具立即不可用且会话仍可继续。
-
-### 阶段 H：Windows、纯文本和安装体验
-
-目标：使真实用户不需要理解项目结构也能稳定安装和启动。
-
-工作项：
-
-- 固定 Node `>=22.19.0`、pnpm 和打包依赖版本。
-- CLI tarball 必须自包含所需 JavaScript 和终端辅助文件。
-- Windows 保留 `mingxu.cmd` 作为受限 PowerShell 环境下的正式入口。
-- 从 `C:\Windows\System32` 启动时，配置、Session 和 Audit 相对路径仍相对配置目录解析。
-- 直接启动时自动判断 TTY、raw mode、TERM 和 stdout 是否重定向。
-- 非 TTY、管道和 `--prompt` 走纯文本模式；没有输入时不能永久等待。
-- stdout 重定向时不输出欢迎页、状态栏、ANSI 或交互提示。
-- stderr 重定向和管道破裂时给出稳定退出码，正确处理 EPIPE。
-- `resume` 和 `--continue` 在非交互场景中支持 prompt，并自动定位当前 workspace 最近会话。
-- `init --force` 修改旧配置前创建备份，不删除旧 Session。
-
-验收：
-
-- Windows 实际运行 `mingxu.cmd --help`、`--version`、`init`、`chat`、`resume` 和 `--continue`。
-- Unix 实际运行打包后的 `mingxu` bin。
-- 从非项目目录启动不会尝试写入系统目录。
-- stdout 重定向得到纯净正文，stderr 保留可诊断信息。
-
-### 阶段 I：发布级测试和性能门槛
-
-目标：把“在开发机上可运行”升级为“发布产物可验证”。
-
-工作项：
-
-- 使用 `@xterm/headless` 建立 VirtualTerminal。
-- 覆盖 60x20、80x24、120x40、resize、scrollback、Overlay、宽字符、emoji、IME 和粘贴。
-- 建立正常退出、Ctrl+C、Ctrl+D、Provider 错误、插件错误和进程信号恢复测试。
-- 覆盖 200 个及以上流式分块、多个并发工具、超长 Markdown、Diff 和 Command 输出。
-- 覆盖恶意 ANSI/OSC、超长无空格文本、无效 Unicode 和二进制样式输出。
-- 从临时目录打包并全局安装真实 CLI tarball，而不是直接调用源码。
-- Windows、Linux 和 macOS CI 不允许静默跳过平台测试。
-- 记录关键性能指标：首屏时间、delta 到显示延迟、重绘行数和长会话内存。
-
-性能门槛：
-
-- 普通流式更新合并到最多约 30 FPS。
-- 95% 的 delta 在本地事件到达后 100 ms 内可见。
-- 普通 delta 不触发整屏重绘。
-- 1,000 条历史消息不要求全部保留为活动渲染组件。
-- 终端 resize 和 Overlay 打开不造成可感知的长时间阻塞。
-
-验收命令：
+## 13. 最终验收命令
 
 ```powershell
 pnpm typecheck
@@ -335,138 +303,29 @@ pnpm pack:dry-run
 pnpm audit --prod
 ```
 
-## 7. 测试矩阵
+这些命令必须在最后一次代码修改后运行。真实 tarball 安装、平台矩阵和实机记录不能用本地源码测试代替。
 
-| 场景 | Windows | Linux | macOS | Fake TTY | xterm/headless | 真实安装 |
-| --- | --- | --- | --- | --- | --- | --- |
-| 交互聊天 | 必须 | 必须 | 必须 | 是 | 是 | 是 |
-| 长流式响应 | 必须 | 必须 | 必须 | 是 | 是 | 是 |
-| 中文/emoji/IME | 必须 | 必须 | 必须 | 部分 | 是 | 抽查 |
-| resize/scrollback | 必须 | 必须 | 必须 | 否 | 是 | 是 |
-| Approval/Overlay | 必须 | 必须 | 必须 | 是 | 是 | 抽查 |
-| 非 TTY/管道 | 必须 | 必须 | 必须 | 是 | 否 | 是 |
-| resume/continue | 必须 | 必须 | 必须 | 是 | 部分 | 是 |
-| 异常终端恢复 | 必须 | 必须 | 必须 | 部分 | 是 | 是 |
-| 扩展完整闭环 | 必须 | 必须 | 必须 | 是 | 部分 | 是 |
+## 14. 成品 CLI 完成定义
 
-## 8. 交付顺序和依赖
+- [ ] Transcript 使用普通终端 scrollback，完成消息只提交一次，普通 delta 不清屏或重排全部历史。
+- [ ] 差分渲染能力通过 `@mingxu/tui` 固定包装，并记录版本、许可证和升级边界。
+- [ ] 正常退出、异常、信号、EPIPE 和降级终端均恢复终端状态并清理监听器。
+- [ ] Editor 通过 IME composition、选择区、宽字符、resize 和真实终端输入测试。
+- [ ] Markdown、Diff、CommandBlock、Table、Tree 和 Progress 达到产品组件验收标准。
+- [ ] Overlay、Approval 和 Agent Tree 通过复杂焦点、viewport 和取消测试。
+- [ ] RuntimeAdapter、CommandController、ProductScreen 和 Session replay 边界完成。
+- [ ] coding-tools write/edit 通过预览、审批、原子提交、TOCTOU 防护、Audit 和 Session 全链路。
+- [ ] 1,000 条历史、并发工具、恶意输出和性能指标通过发布门槛。
+- [ ] Windows、Linux、macOS 的真实 tarball 全局安装 CI 实际通过，Windows System32 场景通过。
+- [ ] README、CHANGELOG、SECURITY 和 development roadmap 与真实能力一致。
+- [ ] 第 13 节全部命令通过且没有平台静默跳过。
 
-```text
-A 基线测试
-  -> B 终端引擎
-     -> C 输入系统
-     -> D 语义 Transcript
-        -> E Overlay 与产品面板
-        -> F 事件投影收口
-           -> G 真实扩展样例
-           -> H 平台与安装收口
-              -> I 发布验收
-```
+## 15. 发布口径
 
-阶段 B 是后续所有视觉工作的前置条件。阶段 F 可以和 C/D 的后半段并行设计，但不能在事件身份未固定时提前完成。阶段 G 不改变 Core 的零工具原则。
+在第 14 节全部勾选之前，只使用以下表述：
 
-## 9. 实施优先级
-
-### P0：阻止称为成品的问题
-
-- 真正的 inline scrollback 和差分活动区域。
-- 流式消息幂等、禁止重复和稳定事件身份。
-- Editor 的 grapheme、多行、粘贴和光标正确性。
-- Overlay 栈和 Approval 焦点。
-- Windows raw mode、退出恢复、非 TTY 和重定向。
-- xterm/headless 与真实 tarball 验收。
-
-### P1：决定日常使用体验的问题
-
-- 语义主题、Markdown、Diff 和 CommandBlock。
-- 命令菜单、模型和 Session 选择器。
-- Extension Center、Context Inspector 和 Agent Tree。
-- Follow-up、Steering、详细模式和状态栏。
-- 一个真实可用的官方参考插件。
-
-### P2：完成后可以继续增强
-
-- 动态 prompt suggestions。
-- 会话 recap。
-- 图片粘贴和附件浏览。
-- 外部编辑器集成。
-- 第三方生态 Adapter 和插件市场。
-
-## 10. 风险与控制
-
-| 风险 | 影响 | 控制措施 |
-| --- | --- | --- |
-| inline scrollback 与 Overlay 冲突 | 历史覆盖、光标错位 | 先固定历史/活动区域协议，再做 Overlay |
-| Windows 输入序列差异 | 快捷键失效、无法退出 | 真实 Windows 测试，不只依赖 mock |
-| 流式事件没有稳定 ID | 重复消息和工具块 | 阶段 A/F 固定事件身份和幂等规则 |
-| CLI 继续承担过多职责 | 修改一个面板影响整个界面 | 拆 RuntimeAdapter、ViewModel、Controller、Screen |
-| 上游 TUI 升级破坏包装层 | 终端行为漂移 | 固定版本，只暴露 MingXu 自有接口 |
-| 插件输出终端控制字符 | 标题、链接或剪贴板被操纵 | 所有外部文本在组件边界统一净化 |
-| 文档提前宣称完成 | 用户预期与实际不符 | 只有发布门槛全部通过才更新状态 |
-
-## 11. 完成定义
-
-以下项目必须全部满足，roadmap 才能将“成品 CLI”标为已完成：
-
-- [ ] `@mingxu/tui` 是唯一 TUI 实现，CLI 不再手写终端控制逻辑。
-- [ ] Transcript 使用普通终端 scrollback，普通 delta 不清屏。
-- [ ] 用户、assistant、工具、审批、状态和错误按稳定 ID 幂等投影。
-- [ ] Editor 通过中文、emoji、IME、多行、历史、粘贴和 resize 测试。
-- [ ] 命令菜单和全部产品面板使用统一 Overlay 栈。
-- [ ] Approval 三种决定、会话复用和跨 principal 隔离通过。
-- [ ] Extension Center、Context Inspector 和 Agent Tree 可浏览、可操作。
-- [ ] 一个官方参考插件通过完整安装与治理闭环。
-- [ ] 非 TTY、管道、stdout 重定向、resume 和 continue 契约稳定。
-- [ ] Windows、Linux 和 macOS 的真实安装测试均通过。
-- [ ] `typecheck`、`test`、`build`、`test:smoke`、`pack:dry-run` 和生产依赖审计通过。
-- [ ] README、CHANGELOG、SECURITY 和 roadmap 与真实能力一致。
-
-## 12. 发布口径
-
-在完成定义全部通过之前，应使用以下表述：
-
-> MingXu 已具备可运行的 Agent 核心、CLI 主链和 TUI 产品原型，正在完成终端渲染、输入、Overlay、真实扩展样例和跨平台发布验收。
+> MingXu 已具备可运行的 Agent 核心、CLI 主链、真实终端 scrollback、TUI 产品原型、真实 coding-tools 插件和安装烟测，正在完成异常恢复、输入法边界、两阶段写入和跨平台发布验收。
 
 全部通过以后，才可以使用：
 
 > MingXu CLI 已达到可长期日常使用的本地 Agent 产品闭环，并具备稳定的扩展安装、治理和终端交互体验。
-
-
-## 13. 阶段状态
-
-- 阶段 A：部分完成，自动化特征基线已建立，真实 Windows Terminal 和 PowerShell 输出样本尚未入库。
-- 阶段 B：部分完成，差分输出、同步输出和刷新合并已有实现；成熟上游渲染包装、真正的历史/活动区域分离及完整信号恢复矩阵尚未完成。
-- 阶段 C：部分完成，grapheme、多行、历史、bracketed paste 和撤销/重做已有覆盖；IME composition、选择区及跨终端 Shift+Enter 降级提示尚未完成。
-- 阶段 D：部分完成，语义块、主题和控制字符净化已有实现；Markdown、Diff、Table、Progress 仍为基础实现，CommandBlock 尚未完成。
-- 阶段 E：部分完成，Overlay 栈、统一命令注册表和主要浏览面板已有实现；Agent 节点/子树取消及更完整的焦点恢复验收尚未完成。
-- 阶段 F：部分完成，事件 ID、幂等投影和乱序缓冲已有实现；RuntimeAdapter、CommandController、ProductScreen 拆分及 PresentationBlock/session replay 投影尚未完成。
-- 阶段 G：部分完成，coding-tools 和扩展生命周期已有真实实现；写入前 Diff 预览、审批后提交以及 Audit 全链路验收尚未完成。
-- 阶段 H：部分完成，非 TTY、重定向、EPIPE、resume/continue、配置备份和真实 tarball 全局安装已有覆盖；System32 启动和三平台安装结果仍需 CI/实机确认。
-- 阶段 I：部分完成，xterm/headless、流式性能门槛、真实安装和三平台 CI 门禁已建立；并发工具、1,000 条历史、进程信号、插件异常、无效 Unicode/二进制输出及完整性能指标仍缺正式验收。
-
-阶段提交只表示对应实现批次已经落库，不等同于该阶段所有工作项已经通过发布验收。第 11 节完成定义保持未勾选，成品 CLI 尚未标记完成。
-
-## 14. 2026-07-31 全阶段复核
-
-本次复核修正了三类会造成验收误判的问题：
-
-- TUI 刷新现在按最高约 30 FPS 合并，退出时取消待执行重绘，性能测试按 100 ms 的 delta 可见性门槛执行。
-- raw mode 启停对称开启/关闭 bracketed paste，粘贴作为单次编辑交付，并补充撤销/重做特征测试。
-- 包烟测改为从真实 tarball 通过 npm 全局安装到隔离前缀；Windows、Linux、macOS CI 均执行安装烟测和 pack dry-run，发布门禁补充生产依赖审计。
-
-仍需后续实现的 P0 缺口：
-
-- 将 Transcript 固化为真正的普通终端 scrollback，完成消息只提交一次，活动区域不再持有和重排全部历史。
-- 引入并固定成熟差分渲染包装层，记录版本、许可证和本地修改；补齐 SIGTERM、SIGHUP、未捕获异常等终端恢复测试。
-- 完成 IME composition、选择区和输入法边界测试。
-- 完成 RuntimeAdapter、CommandController、ProductScreen 的职责拆分和 session replay 投影。
-- coding-tools 写操作改为预览/审批/提交两阶段协议，并验证 Policy、Approval、Audit 和 Session 摘要全链路。
-- 在三个平台的 CI 结果实际通过后，再确认跨平台真实安装验收；不能仅凭工作流配置宣称通过。
-
-仍需后续实现的 P1/P2 缺口：
-
-- 完整 Markdown、Diff、CommandBlock、Table、Tree 和 Progress 产品组件。
-- Agent Tree 的节点/子树取消，以及面板在复杂嵌套和 resize 下的焦点恢复。
-- Stage I 中多个并发工具、超长输出、1,000 条历史、恶意/无效字节输入和完整内存/重绘指标。
-- README、CHANGELOG、SECURITY 和 development roadmap 仍需按最终真实能力统一更新；当前文档仍混有 coding-tools 骨架期口径。
-
