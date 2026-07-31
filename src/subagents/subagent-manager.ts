@@ -36,6 +36,8 @@ export interface SubagentRunNode {
   readonly usage?: AgentLoopResult["usage"];
   readonly content?: string;
   readonly error?: string;
+  readonly cancellationReason?: string;
+  readonly cancellationError?: string;
   readonly children: readonly string[];
 }
 
@@ -51,6 +53,25 @@ export interface SubagentSnapshot {
   readonly activeCount: number;
   readonly nodes: readonly SubagentRunNode[];
   readonly tree: readonly SubagentTreeNode[];
+}
+
+export interface SubagentCancelRequest {
+  readonly sessionId: string;
+  readonly subtree?: boolean;
+  readonly reason?: string;
+}
+
+export interface SubagentCancelTargetResult {
+  readonly sessionId: string;
+  readonly status: "accepted" | "rejected";
+  readonly reason: string;
+}
+
+export interface SubagentCancelResult {
+  readonly sessionId: string;
+  readonly scope: "node" | "subtree";
+  readonly status: "accepted" | "rejected";
+  readonly targets: readonly SubagentCancelTargetResult[];
 }
 
 export interface CreateSubagentSessionRequest {
@@ -70,6 +91,8 @@ export class SubagentManager {
   readonly #deps: SubagentDependencies;
   readonly #runtime: SubagentRuntimeOptions;
   readonly #active = new Set<string>();
+  readonly #activeSessions = new Map<string, AgentSession>();
+  readonly #cancelRequested = new Set<string>();
   readonly #nodes = new Map<string, SubagentRunNode>();
 
   constructor(deps: SubagentDependencies, runtime: SubagentRuntimeOptions = {}) {
@@ -100,6 +123,31 @@ export class SubagentManager {
       activeCount: this.activeCount,
       nodes,
       tree,
+    };
+  }
+
+  cancel(request: SubagentCancelRequest): SubagentCancelResult {
+    const node = this.#nodes.get(request.sessionId);
+    const scope = request.subtree === true ? "subtree" : "node";
+    if (!node) {
+      return {
+        sessionId: request.sessionId,
+        scope,
+        status: "rejected",
+        targets: [{ sessionId: request.sessionId, status: "rejected", reason: "Subagent was not found." }],
+      };
+    }
+
+    const targets = (request.subtree === true
+      ? this.#collectSubtree(request.sessionId)
+      : [node])
+      .sort((left, right) => right.depth - left.depth)
+      .map((target): SubagentCancelTargetResult => this.#cancelTarget(target, request.reason ?? "Cancelled by user"));
+    return {
+      sessionId: request.sessionId,
+      scope,
+      status: targets.some((target) => target.status === "accepted") ? "accepted" : "rejected",
+      targets,
     };
   }
 
@@ -146,18 +194,66 @@ export class SubagentManager {
         ...(request.parentSessionId !== undefined ? { parentSessionId: request.parentSessionId } : {}),
         ...(request.parentRunId !== undefined ? { parentRunId: request.parentRunId } : {}),
       });
+      this.#activeSessions.set(sessionId, session);
       const result = await session.prompt(request.prompt);
-      this.#setResult(sessionId, "completed", result);
+      if (!this.#cancelRequested.has(sessionId)) {
+        this.#setResult(sessionId, "completed", result);
+      }
       return result;
     } catch (error) {
-      this.#setError(sessionId, error);
+      if (!this.#cancelRequested.has(sessionId)) {
+        this.#setError(sessionId, error);
+      }
       throw error;
     } finally {
       this.#active.delete(sessionId);
+      this.#activeSessions.delete(sessionId);
+      this.#cancelRequested.delete(sessionId);
       const node = this.#nodes.get(sessionId);
       if (node && node.state === "running") {
         this.#setState(sessionId, "cancelled");
       }
+    }
+  }
+
+  #collectSubtree(sessionId: string): SubagentRunNode[] {
+    const result: SubagentRunNode[] = [];
+    const visit = (id: string): void => {
+      const current = this.#nodes.get(id);
+      if (!current) return;
+      result.push(current);
+      for (const child of this.#nodes.values()) {
+        if (child.parentSessionId === id || child.parentRunId === id) visit(child.sessionId);
+      }
+    };
+    visit(sessionId);
+    return result;
+  }
+
+  #cancelTarget(node: SubagentRunNode, reason: string): SubagentCancelTargetResult {
+    const session = this.#activeSessions.get(node.sessionId);
+    if (node.state !== "running" || !session) {
+      return {
+        sessionId: node.sessionId,
+        status: "rejected",
+        reason: node.state === "running" ? "Subagent session is not cancellable yet." : `Subagent already ${node.state}.`,
+      };
+    }
+    this.#cancelRequested.add(node.sessionId);
+    try {
+      session.abort(reason);
+      this.#nodes.set(node.sessionId, {
+        ...node,
+        state: "cancelled",
+        endedAt: new Date().toISOString(),
+        cancellationReason: reason,
+      });
+      return { sessionId: node.sessionId, status: "accepted", reason };
+    } catch (error) {
+      this.#cancelRequested.delete(node.sessionId);
+      const message = error instanceof Error ? error.message : String(error);
+      this.#nodes.set(node.sessionId, { ...node, cancellationError: message });
+      return { sessionId: node.sessionId, status: "rejected", reason: `Cancellation failed: ${message}` };
     }
   }
 

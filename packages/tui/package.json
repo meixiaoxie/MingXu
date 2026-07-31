@@ -20,6 +20,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "marked": "^18.0.7",
     "string-width": "^8.2.2"
   },
   "files": [

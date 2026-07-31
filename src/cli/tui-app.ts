@@ -35,6 +35,7 @@ interface SelectPanel<T = string> {
   readonly note?: string;
   filterText?: string;
   readonly onChoose: (item: SelectPanelItem<T>) => Promise<void> | void;
+  readonly onCancelItem?: (item: SelectPanelItem<T>) => Promise<void> | void;
 }
 
 type ActivePanel = TextPanel | SelectPanel | undefined;
@@ -531,6 +532,8 @@ export class CliTuiApp {
         `terminationReason: ${node.terminationReason ?? "n/a"}`,
         `content: ${node.content ? truncateToWidth(node.content, 120) : "none"}`,
         `error: ${node.error ?? "none"}`,
+        `cancellationReason: ${node.cancellationReason ?? "none"}`,
+        `cancellationError: ${node.cancellationError ?? "none"}`,
       ],
       value: node.id,
     }));
@@ -546,6 +549,7 @@ export class CliTuiApp {
       note: [
         `active: ${snapshot.subagents.activeCount}`,
         ...treeLines,
+        "Press x or Delete to cancel a node or subtree.",
       ].join("\n"),
       onChoose: async (item) => {
         this.#pushPanel({
@@ -554,6 +558,51 @@ export class CliTuiApp {
           lines: item.detailLines.length > 0 ? [...item.detailLines] : ["No additional details."],
           scrollOffset: 0,
         });
+        this.#host.requestRender();
+      },
+      onCancelItem: (item) => this.#openAgentCancellationPanel(item.value),
+    });
+    this.#host.requestRender();
+  }
+
+  #openAgentCancellationPanel(sessionId: string): void {
+    this.#pushPanel({
+      kind: "select",
+      title: "cancel agent",
+      items: [
+        {
+          id: "node",
+          label: "Cancel this node",
+          detailLines: [`Target: ${sessionId}`],
+          value: "node",
+        },
+        {
+          id: "subtree",
+          label: "Cancel node and subtree",
+          detailLines: [`Target: ${sessionId} and all descendants`],
+          value: "subtree",
+        },
+      ],
+      selectedIndex: 0,
+      scrollOffset: 0,
+      note: "Select a scope and press Enter to confirm. Esc keeps the agent running.",
+      onChoose: async (item) => {
+        const cancel = this.#runtime.cancelSubagents;
+        const lines: string[] = [];
+        if (!cancel) {
+          lines.push("Cancellation is unavailable in this runtime.");
+        } else {
+          const result = await cancel({
+            sessionId,
+            subtree: item.value === "subtree",
+            reason: "Cancelled from Agent Tree",
+          });
+          lines.push(`result: ${result.status}`, `scope: ${result.scope}`);
+          lines.push(...result.targets.map((target) => `${target.sessionId}: ${target.status} - ${target.reason}`));
+          await this.#refreshSnapshot();
+        }
+        this.#popPanel();
+        this.#pushPanel({ kind: "text", title: "cancel result", lines, scrollOffset: 0 });
         this.#host.requestRender();
       },
     });
@@ -907,6 +956,11 @@ export class CliTuiApp {
       this.#host.requestRender();
       return;
     }
+    if ((input.sequence === "x" || input.name === "delete") && panel.onCancelItem) {
+      const item = items[panel.selectedIndex] ?? items[0];
+      if (item) void panel.onCancelItem(item);
+      return;
+    }
     if (input.name === "down") {
       if (items.length > 0) {
         panel.selectedIndex = (panel.selectedIndex + 1) % items.length;
@@ -1213,7 +1267,7 @@ export class CliTuiApp {
     inputLineCount: number,
   ): number | undefined {
     if (height === undefined) return undefined;
-    return Math.max(6, height - footerLineCount - inputLineCount - 4);
+    return Math.max(3, height - footerLineCount - inputLineCount - 4);
   }
 
   #renderPanel(width: number, height?: number): string[] {
@@ -1228,29 +1282,30 @@ export class CliTuiApp {
   }
 
   #renderTextPanel(panel: TextPanel, width: number, height?: number): string[] {
-    const panelHeight = Math.max(6, (height ?? this.#terminal.size.rows) - 10);
-    const bodyLines = panel.lines.flatMap((line) => wrapText(line, Math.max(20, width - 4)));
-    const visibleHeight = Math.max(1, panelHeight - 3);
+    const panelHeight = Math.max(3, height ?? this.#terminal.size.rows - 10);
+    const innerHeight = Math.max(1, panelHeight - 2);
+    const bodyLines = panel.lines.flatMap((line) => wrapText(line, Math.max(1, width - 4)));
+    const visibleHeight = Math.max(1, innerHeight - 2);
     const maxScroll = Math.max(0, bodyLines.length - visibleHeight);
     panel.scrollOffset = Math.max(0, Math.min(panel.scrollOffset, maxScroll));
     const lines = [
-      `title: ${panel.title}`,
-      "",
       ...bodyLines.slice(panel.scrollOffset, panel.scrollOffset + visibleHeight),
-      "",
       maxScroll > 0
         ? `Scroll ${panel.scrollOffset + 1}-${Math.min(bodyLines.length, panel.scrollOffset + visibleHeight)} of ${bodyLines.length}`
         : "Esc closes",
     ];
-    return new Box(new StaticLines(lines.slice(0, panelHeight)), panel.title).render(width);
+    return new Box(new StaticLines(lines.slice(0, innerHeight)), panel.title).render(width);
   }
 
   #renderSelectPanel(panel: SelectPanel, width: number, height?: number): string[] {
     const items = this.#filterPanelItems(panel);
     const selected = items[panel.selectedIndex] ?? items[0];
-    const panelHeight = Math.max(8, (height ?? this.#terminal.size.rows) - 10);
-    const noteLines = panel.note ? wrapText(panel.note, Math.max(20, width - 4)) : [];
-    const availableListHeight = Math.max(1, panelHeight - noteLines.length - 7);
+    const panelHeight = Math.max(3, height ?? this.#terminal.size.rows - 10);
+    const innerHeight = Math.max(1, panelHeight - 2);
+    const allNoteLines = panel.note ? wrapText(panel.note, Math.max(1, width - 4)) : [];
+    const noteLines = allNoteLines.slice(0, Math.max(0, innerHeight - 3));
+    const chromeHeight = noteLines.length + (innerHeight >= 4 ? 2 : 0);
+    const availableListHeight = Math.max(1, innerHeight - chromeHeight);
     const maxScroll = Math.max(0, items.length - availableListHeight);
     panel.scrollOffset = Math.max(0, Math.min(panel.scrollOffset, maxScroll));
     if (panel.selectedIndex < panel.scrollOffset) {
@@ -1262,30 +1317,30 @@ export class CliTuiApp {
       return new Box(new StaticLines([
         ...noteLines,
         `filter: ${panel.filterText ?? ""}`,
-        "",
         "No matching items.",
-      ]), panel.title).render(width);
+      ].slice(0, innerHeight)), panel.title).render(width);
     }
     const listItems = items.slice(panel.scrollOffset, panel.scrollOffset + availableListHeight);
     const list = new SelectList(listItems.map((item) => ({
       id: item.id,
       label: item.label,
       ...(item.detailLines[0] !== undefined ? { description: item.detailLines[0] } : {}),
-    })), panel.title);
+    })), "");
     for (let index = 0; index < panel.selectedIndex - panel.scrollOffset; index += 1) {
       list.move(1);
     }
     const listLines = [
       ...noteLines,
-      `filter: ${panel.filterText ?? ""}`,
-      `showing ${panel.scrollOffset + 1}-${Math.min(items.length, panel.scrollOffset + listItems.length)} of ${items.length}`,
+      ...(innerHeight >= 4 ? [
+        `filter: ${panel.filterText ?? ""}`,
+        `showing ${panel.scrollOffset + 1}-${Math.min(items.length, panel.scrollOffset + listItems.length)} of ${items.length}`,
+      ] : []),
       ...list.render(width),
-      "",
-      ...(selected ? selected.detailLines.flatMap((line) => wrapText(line, Math.max(20, width - 4))) : ["No item selected."]),
-      "",
-      "Use Up/Down to browse, type to filter, Esc closes.",
     ];
-    return new Box(new StaticLines(listLines.slice(0, panelHeight)), panel.title).render(width);
+    if (listLines.length < innerHeight && selected) {
+      listLines.push(...selected.detailLines.flatMap((line) => wrapText(line, Math.max(1, width - 4))));
+    }
+    return new Box(new StaticLines(listLines.slice(0, innerHeight)), panel.title).render(width);
   }
 
   #filterPanelItems<T>(panel: SelectPanel<T>): readonly SelectPanelItem<T>[] {

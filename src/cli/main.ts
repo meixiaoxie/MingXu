@@ -874,6 +874,7 @@ async function createCliRuntimeContext(options: {
         session: summarizeInstructionScope(options.config.instructions?.session),
       },
     }),
+    cancelSubagents: (request) => subagentManager.cancel(request),
     close: async () => {
       await mcpManager.close();
       await eventSink.flush?.();

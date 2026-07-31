@@ -25,7 +25,7 @@
 | R1 终端渲染与真实 scrollback | P0 | 完成历史/活动区域分离和成熟差分渲染包装 | 无 | 已完成（2026-07-31） |
 | R2 终端生命周期与异常恢复 | P0 | 所有退出和降级路径对称恢复终端 | 可与 R1 并行 | 已完成（2026-07-31） |
 | R3 IME、选择区与输入边界 | P0 | 完成真实中文输入法和选择编辑体验 | R1 的 viewport 协议 | 已完成（2026-07-31） |
-| R4 产品组件与复杂面板 | P1 | 完成 Markdown、Diff、CommandBlock 和面板交互 | R1、R3 | 待完成 |
+| R4 产品组件与复杂面板 | P1 | 完成 Markdown、Diff、CommandBlock 和面板交互 | R1、R3 | 已完成（2026-07-31） |
 | R5 CLI 职责拆分与 Session replay | P0 | 完成运行适配、命令、屏幕和回放边界 | 稳定事件投影 | 待完成 |
 | R6 coding-tools 两阶段写入 | P0 | 写入前预览，审批后原子提交 | R4、R5 | 待完成 |
 | R7 发布级压力与跨平台验收 | P0 | 用真实产物和三平台结果关闭发布门槛 | R1-R6 | 待完成 |
@@ -180,6 +180,18 @@ R3 已于 2026-07-31 完成，后续产品组件、运行时边界和发布验�
 - 60 列紧凑模式下组件不重叠，composer 始终可见。
 - 工具和命令输出不会混入 assistant 正文或操纵终端。
 - 任意时刻只有栈顶 Overlay 接收输入，关闭后完整恢复编辑状态。
+
+### 完成状态
+
+R4 已于 2026-07-31 完成，运行时职责拆分、两阶段写入和发布级验收仍按后续工作包推进：
+
+- `Markdown` 使用固定的 `marked` 18.0.7 GFM lexer，终端渲染覆盖标题、列表、引用、围栏代码、行内代码、链接和基本表格；`Diff` 增加文件头、hunk、双侧行号、增删标记、上下文折叠、长行截断和整体折叠，所有表达均不依赖颜色。
+- 新增可增量追加 stdout/stderr 的 `CommandBlock`，统一显示 running/completed/failed/cancelled、退出码、信号、耗时、前段输出省略、折叠和取消摘要；Table、Tree、KeyValue 与 Progress 增加宽度分配和窄终端降级。
+- 外部文本统一经过终端安全扫描，移除 CSI、OSC 8/52、DCS、C0/C1 和未闭合转义，规范化 tab/CR，替换无效 Unicode，并整体省略明显二进制输出；Box、SelectList 和 Editor 粘贴入口也纳入同一边界。
+- `SubagentManager` 保留活动 Session 句柄并提供节点/子树取消，按最深节点优先执行，记录接受、拒绝、失败原因和取消摘要，迟到完成或异常不会覆盖已确认的 cancelled 状态；Agent Tree 通过现有 Overlay 栈提供 scope 确认和逐节点结果。
+- 选择面板会随筛选、选择和 resize 维护 viewport，低高度时严格使用分配给 Overlay 的行数；Approval 继续以更高优先级抢占输入，关闭详情、确认或结果面板后 composer 草稿、选择、光标和原面板焦点保持不变。
+- R4 聚焦测试共 4 个文件、17 个用例通过，覆盖 60 列长 Markdown/Diff/Command、无空格文本、恶意控制序列、窄终端降级、并发命令乱序更新、多层 Overlay、低高度 composer，以及节点/子树取消的成功、拒绝、竞态和恢复；`pnpm typecheck` 与 `pnpm test`（60 个文件、298 个用例）通过。
+- 本状态不包含 R5-R7、coding-tools 两阶段写入、Session replay、跨平台实机发布验收或第 14 节最终完成定义，也不代表成品 CLI 已完成。
 
 ## 8. R5：CLI 职责拆分与 Session replay
 
@@ -346,7 +358,7 @@ pnpm audit --prod
 
 在第 14 节全部勾选之前，只使用以下表述：
 
-> MingXu 已具备可运行的 Agent 核心、CLI 主链、真实终端 scrollback、完整终端生命周期恢复、IME 与选择编辑边界、TUI 产品原型、真实 coding-tools 插件和安装烟测，正在完成产品组件、两阶段写入和跨平台发布验收。
+> MingXu 已具备可运行的 Agent 核心、CLI 主链、真实终端 scrollback、完整终端生命周期恢复、IME 与选择编辑边界、TUI 产品组件、真实 coding-tools 插件和安装烟测，正在完成运行时职责拆分、Session replay、两阶段写入和跨平台发布验收。
 
 全部通过以后，才可以使用：
 

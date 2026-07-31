@@ -3,7 +3,7 @@ import type { SessionSummary } from "../session/types.js";
 import type { AgentPresetV1 } from "../presets/agent-preset-registry.js";
 import type { ResolvedResource } from "../resources/resource-types.js";
 import type { SkillDescriptor } from "../skills/skill-registry.js";
-import type { SubagentSnapshot } from "../subagents/subagent-manager.js";
+import type { SubagentCancelRequest, SubagentCancelResult, SubagentSnapshot } from "../subagents/subagent-manager.js";
 import type { ConfigLayerInfo } from "./config-discovery.js";
 import type { ApprovalHandler } from "../approval/types.js";
 import type { ExtensionDescriptor } from "../extensions/protocol.js";
@@ -60,5 +60,6 @@ export interface CliRuntimeContext {
   listSessions(): Promise<string>;
   listRecentSessions(limit?: number): Promise<readonly SessionSummary[]>;
   snapshot(): Promise<CliRuntimeSnapshot>;
+  cancelSubagents?(request: SubagentCancelRequest): Promise<SubagentCancelResult> | SubagentCancelResult;
   close(): Promise<void>;
 }

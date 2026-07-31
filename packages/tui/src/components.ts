@@ -1,3 +1,5 @@
+import { marked, type Token, type Tokens } from "marked";
+
 import {
   COMPOSITION_END,
   COMPOSITION_START,
@@ -8,7 +10,7 @@ import {
   type ComponentAction,
   type KeyInput,
 } from "./types.js";
-import { padToWidth, splitGraphemes, truncateToWidth, visibleWidth, wrapText } from "./strings.js";
+import { padToWidth, sanitizeTerminalText, splitGraphemes, truncateToWidth, visibleWidth, wrapText } from "./strings.js";
 
 export interface TextOptions {
   readonly text: string;
@@ -70,7 +72,7 @@ export class Box implements Component {
   render(width: number): string[] {
     const innerWidth = Math.max(1, width - 2);
     const content = this.#content.render(innerWidth).map((line) => padToWidth(truncateToWidth(line, innerWidth), innerWidth));
-    const title = this.#title?.trim() ?? "";
+    const title = sanitizeTerminalText(this.#title ?? "").trim();
     const top = title.length > 0
       ? `+ ${truncateToWidth(title, innerWidth - 2)} ${"-".repeat(Math.max(0, innerWidth - visibleWidth(title) - 2))}+`
       : `+${"-".repeat(innerWidth)}+`;
@@ -118,13 +120,14 @@ export class SelectList implements Component {
   invalidate(): void {}
 
   render(width: number): string[] {
-    const lines = this.#title ? [this.#title] : [];
+    const title = sanitizeTerminalText(this.#title);
+    const lines = title ? [truncateToWidth(title, width)] : [];
     this.#items.forEach((item, index) => {
       const prefix = index === this.#selectedIndex ? ">" : " ";
-      const base = `${prefix} ${item.label}`;
+      const base = `${prefix} ${sanitizeTerminalText(item.label)}`;
       lines.push(truncateToWidth(base, width));
       if (item.description) {
-        lines.push(truncateToWidth(`  ${item.description}`, width));
+        lines.push(truncateToWidth(`  ${sanitizeTerminalText(item.description)}`, width));
       }
     });
     return lines;
@@ -800,16 +803,8 @@ export class Markdown implements Component {
   invalidate(): void {}
 
   render(width: number): string[] {
-    const lines: string[] = [];
-    for (const rawLine of this.#text.split(/\r?\n/u)) {
-      const line = rawLine
-        .replace(/^###\s+/u, "  ")
-        .replace(/^##\s+/u, "")
-        .replace(/^#\s+/u, "")
-        .replace(/^\s*-\s+/u, "- ");
-      lines.push(...wrapText(line, width));
-    }
-    return lines;
+    const safeText = sanitizeTerminalText(this.#text);
+    return renderMarkdownTokens(marked.lexer(safeText, { gfm: true }), Math.max(1, width));
   }
 }
 
@@ -833,9 +828,10 @@ export class Tree implements Component {
     const visit = (nodes: readonly TreeNode[], prefix: string): void => {
       nodes.forEach((node, index) => {
         const connector = index === nodes.length - 1 ? "`-- " : "|-- ";
-        lines.push(truncateToWidth(`${prefix}${connector}${node.label}`, width));
+        lines.push(truncateToWidth(`${prefix}${connector}${sanitizeTerminalText(node.label)}`, width));
         if (node.children?.length) {
-          visit(node.children, `${prefix}${index === nodes.length - 1 ? "    " : "|   "}`);
+          const childPrefix = width < 24 ? `${prefix}  ` : `${prefix}${index === nodes.length - 1 ? "    " : "|   "}`;
+          visit(node.children, childPrefix);
         }
       });
     };
@@ -846,15 +842,38 @@ export class Tree implements Component {
 
 export class Table implements Component {
   #rows: readonly (readonly string[])[] = [];
+  readonly #header: boolean;
 
-  constructor(rows: readonly (readonly string[])[] = []) {
+  constructor(rows: readonly (readonly string[])[] = [], options: { readonly header?: boolean } = {}) {
     this.#rows = rows;
+    this.#header = options.header ?? false;
   }
 
   invalidate(): void {}
 
   render(width: number): string[] {
-    return this.#rows.map((row) => truncateToWidth(row.join(" | "), width));
+    const rows = this.#rows.map((row) => row.map(sanitizeTerminalText));
+    const columnCount = Math.max(0, ...rows.map((row) => row.length));
+    if (columnCount === 0) return [];
+    if (width < columnCount * 4 + (columnCount - 1) * 3) {
+      return rows.flatMap((row, rowIndex) => row.flatMap((cell, columnIndex) => {
+        const label = `${rowIndex + 1}.${columnIndex + 1}: `;
+        return wrapText(`${label}${cell}`, width);
+      }));
+    }
+
+    const separatorWidth = (columnCount - 1) * 3;
+    const available = Math.max(columnCount * 3, width - separatorWidth);
+    const desired = Array.from({ length: columnCount }, (_, columnIndex) => Math.max(3, ...rows.map((row) => visibleWidth(row[columnIndex] ?? ""))));
+    const widths = allocateWidths(desired, available, 3);
+    const renderRow = (row: readonly string[]): string => row
+      .map((cell, index) => padToWidth(truncateToWidth(cell, widths[index] ?? 3), widths[index] ?? 3))
+      .join(" | ");
+    const lines = rows.map(renderRow);
+    if (this.#header && lines.length > 0) {
+      lines.splice(1, 0, widths.map((columnWidth) => "-".repeat(columnWidth)).join("-+-"));
+    }
+    return lines;
   }
 }
 
@@ -868,7 +887,19 @@ export class KeyValue implements Component {
   invalidate(): void {}
 
   render(width: number): string[] {
-    return this.#entries.map(([key, value]) => truncateToWidth(`${key}: ${value}`, width));
+    const entries = this.#entries.map(([key, value]) => [sanitizeTerminalText(key), sanitizeTerminalText(value)] as const);
+    const keyWidth = Math.min(Math.max(0, ...entries.map(([key]) => visibleWidth(key))), Math.max(1, Math.floor(width * 0.4)));
+    if (width < 24 || width - keyWidth - 2 < 8) {
+      return entries.flatMap(([key, value]) => [
+        truncateToWidth(`${key}:`, width),
+        ...wrapText(value, Math.max(1, width - 2)).map((line) => `  ${line}`),
+      ]);
+    }
+    return entries.flatMap(([key, value]) => {
+      const prefix = `${padToWidth(truncateToWidth(key, keyWidth), keyWidth)}: `;
+      const valueLines = wrapText(value, Math.max(1, width - visibleWidth(prefix)));
+      return valueLines.map((line, index) => `${index === 0 ? prefix : " ".repeat(visibleWidth(prefix))}${line}`);
+    });
   }
 }
 
@@ -886,28 +917,344 @@ export class Progress implements Component {
   invalidate(): void {}
 
   render(width: number): string[] {
+    const label = sanitizeTerminalText(this.#label);
     const pct = Math.max(0, Math.min(100, Math.round((this.#current / this.#total) * 100)));
-    const barWidth = Math.max(8, width - visibleWidth(this.#label) - 10);
+    const suffix = `${pct}%`;
+    if (width < 16 || width - visibleWidth(label) - visibleWidth(suffix) - 5 < 4) {
+      return [truncateToWidth(`${label} ${suffix}`, width)];
+    }
+    const barWidth = Math.max(4, width - visibleWidth(label) - visibleWidth(suffix) - 5);
     const filled = Math.round((barWidth * pct) / 100);
     const bar = `[${"=".repeat(filled)}${" ".repeat(Math.max(0, barWidth - filled))}]`;
-    return [truncateToWidth(`${this.#label} ${bar} ${pct}%`, width)];
+    return [truncateToWidth(`${label} ${bar} ${suffix}`, width)];
   }
+}
+
+export interface DiffOptions {
+  readonly collapsed?: boolean;
+  readonly maxContextLines?: number;
 }
 
 export class Diff implements Component {
   #lines: readonly string[] = [];
+  #collapsed: boolean;
+  readonly #maxContextLines: number;
 
-  constructor(lines: readonly string[] = []) {
+  constructor(lines: readonly string[] = [], options: DiffOptions = {}) {
     this.#lines = lines;
+    this.#collapsed = options.collapsed ?? false;
+    this.#maxContextLines = Math.max(1, options.maxContextLines ?? 6);
   }
 
   invalidate(): void {}
 
+  setCollapsed(collapsed: boolean): void {
+    this.#collapsed = collapsed;
+  }
+
+  toggleCollapsed(): void {
+    this.#collapsed = !this.#collapsed;
+  }
+
   render(width: number): string[] {
-    return this.#lines.map((line) => truncateToWidth(line, width));
+    const entries = parseUnifiedDiff(this.#lines.map(sanitizeTerminalText));
+    const headers = entries.filter((entry) => entry.kind === "file");
+    if (this.#collapsed) {
+      return [
+        ...headers.map((entry) => truncateToWidth(entry.text, width)),
+        truncateToWidth(`[diff collapsed: ${entries.length - headers.length} lines]`, width),
+      ];
+    }
+    const folded = foldDiffContext(entries, this.#maxContextLines);
+    const numberWidth = Math.max(1, ...folded.flatMap((entry) => [entry.oldLine ?? 0, entry.newLine ?? 0]).map((line) => String(line).length));
+    return folded.map((entry) => {
+      if (entry.kind === "file" || entry.kind === "hunk" || entry.kind === "fold") {
+        return truncateToWidth(entry.text, width);
+      }
+      const oldLine = entry.oldLine === undefined ? " ".repeat(numberWidth) : String(entry.oldLine).padStart(numberWidth);
+      const newLine = entry.newLine === undefined ? " ".repeat(numberWidth) : String(entry.newLine).padStart(numberWidth);
+      const marker = entry.kind === "add" ? "+" : entry.kind === "delete" ? "-" : " ";
+      return truncateToWidth(`${oldLine} ${newLine} | ${marker} ${entry.text}`, width);
+    });
   }
 }
 
+export type CommandStatus = "running" | "completed" | "failed" | "cancelled";
+export type CommandStream = "stdout" | "stderr";
+
+export interface CommandOutputChunk {
+  readonly stream: CommandStream;
+  readonly text: string;
+}
+
+export interface CommandBlockOptions {
+  readonly command: string;
+  readonly status?: CommandStatus;
+  readonly output?: readonly CommandOutputChunk[];
+  readonly exitCode?: number;
+  readonly signal?: string;
+  readonly durationMs?: number;
+  readonly maxLines?: number;
+  readonly collapsed?: boolean;
+  readonly cancellationSummary?: string;
+}
+
+export class CommandBlock implements Component {
+  readonly #command: string;
+  readonly #output: CommandOutputChunk[];
+  readonly #maxLines: number;
+  #status: CommandStatus;
+  #exitCode: number | undefined;
+  #signal: string | undefined;
+  #durationMs: number | undefined;
+  #collapsed: boolean;
+  #cancellationSummary: string | undefined;
+
+  constructor(options: CommandBlockOptions) {
+    this.#command = sanitizeTerminalText(options.command);
+    this.#status = options.status ?? "running";
+    this.#output = [...(options.output ?? [])];
+    this.#exitCode = options.exitCode;
+    this.#signal = options.signal;
+    this.#durationMs = options.durationMs;
+    this.#maxLines = Math.max(1, options.maxLines ?? 200);
+    this.#collapsed = options.collapsed ?? false;
+    this.#cancellationSummary = options.cancellationSummary;
+  }
+
+  invalidate(): void {}
+
+  append(stream: CommandStream, text: string): void {
+    this.#output.push({ stream, text });
+  }
+
+  update(result: {
+    readonly status: CommandStatus;
+    readonly exitCode?: number;
+    readonly signal?: string;
+    readonly durationMs?: number;
+    readonly cancellationSummary?: string;
+  }): void {
+    this.#status = result.status;
+    this.#exitCode = result.exitCode;
+    this.#signal = result.signal;
+    this.#durationMs = result.durationMs;
+    this.#cancellationSummary = result.cancellationSummary;
+  }
+
+  setCollapsed(collapsed: boolean): void {
+    this.#collapsed = collapsed;
+  }
+
+  toggleCollapsed(): void {
+    this.#collapsed = !this.#collapsed;
+  }
+
+  render(width: number): string[] {
+    const details = [
+      `status: ${this.#status}`,
+      ...(this.#exitCode !== undefined ? [`exit: ${this.#exitCode}`] : []),
+      ...(this.#signal !== undefined ? [`signal: ${sanitizeTerminalText(this.#signal)}`] : []),
+      ...(this.#durationMs !== undefined ? [`duration: ${formatDuration(this.#durationMs)}`] : []),
+    ];
+    const header = [
+      ...wrapText(`$ ${this.#command}`, width),
+      ...details.flatMap((detail) => wrapText(detail, width)),
+    ];
+    const output = this.#output.flatMap((chunk) => sanitizeTerminalText(chunk.text)
+      .split("\n")
+      .map((line) => ({ stream: chunk.stream, text: line })));
+    if (this.#collapsed) {
+      return [...header, truncateToWidth(`[output collapsed: ${output.length} lines]`, width)];
+    }
+    const omitted = Math.max(0, output.length - this.#maxLines);
+    const visible = output.slice(-this.#maxLines).flatMap((line) => {
+      const prefix = line.stream === "stderr" ? "err | " : "out | ";
+      return wrapText(line.text, Math.max(1, width - visibleWidth(prefix))).map((part) => truncateToWidth(`${prefix}${part}`, width));
+    });
+    return [
+      ...header,
+      ...(omitted > 0 ? [truncateToWidth(`[${omitted} earlier output lines omitted]`, width)] : []),
+      ...visible,
+      ...(this.#cancellationSummary ? wrapText(`cancel: ${sanitizeTerminalText(this.#cancellationSummary)}`, width) : []),
+    ];
+  }
+}
+
+interface DiffEntry {
+  readonly kind: "file" | "hunk" | "context" | "add" | "delete" | "fold";
+  readonly text: string;
+  readonly oldLine?: number;
+  readonly newLine?: number;
+}
+
+function renderMarkdownTokens(tokens: readonly Token[], width: number, indent = ""): string[] {
+  const lines: string[] = [];
+  for (const token of tokens) {
+    switch (token.type) {
+      case "space":
+        if (lines.at(-1) !== "") lines.push("");
+        break;
+      case "heading": {
+        const heading = token as Tokens.Heading;
+        lines.push(...wrapWithPrefix(`${"#".repeat(heading.depth)} `, renderInline(heading.tokens), width, indent));
+        break;
+      }
+      case "paragraph": {
+        const paragraph = token as Tokens.Paragraph;
+        lines.push(...wrapWithPrefix("", renderInline(paragraph.tokens), width, indent));
+        break;
+      }
+      case "blockquote": {
+        const quote = token as Tokens.Blockquote;
+        for (const line of renderMarkdownTokens(quote.tokens, Math.max(1, width - 2))) {
+          lines.push(truncateToWidth(`${indent}> ${line}`, width));
+        }
+        break;
+      }
+      case "code": {
+        const code = token as Tokens.Code;
+        lines.push(truncateToWidth(`${indent}\`\`\`${sanitizeTerminalText(code.lang ?? "")}`, width));
+        for (const line of sanitizeTerminalText(code.text).split("\n")) {
+          lines.push(truncateToWidth(`${indent}${line}`, width));
+        }
+        lines.push(truncateToWidth(`${indent}\`\`\``, width));
+        break;
+      }
+      case "list": {
+        const list = token as Tokens.List;
+        list.items.forEach((item, index) => {
+          const marker = list.ordered ? `${Number(list.start || 1) + index}. ` : "- ";
+          const itemText = renderInline(item.tokens.flatMap((child) => child.type === "text" && child.tokens ? child.tokens : [child]));
+          lines.push(...wrapWithPrefix(marker, itemText, width, indent));
+        });
+        break;
+      }
+      case "table": {
+        const table = token as Tokens.Table;
+        const rows = [table.header, ...table.rows].map((row) => row.map((cell) => renderInline(cell.tokens)));
+        lines.push(...new Table(rows, { header: true }).render(Math.max(1, width - visibleWidth(indent))).map((line) => `${indent}${line}`));
+        break;
+      }
+      case "hr":
+        lines.push(`${indent}${"-".repeat(Math.max(1, width - visibleWidth(indent)))}`);
+        break;
+      case "html":
+        lines.push(...wrapWithPrefix("", sanitizeTerminalText((token as Tokens.HTML).text).replace(/<[^>]*>/gu, ""), width, indent));
+        break;
+      default:
+        if ("tokens" in token && Array.isArray(token.tokens)) {
+          lines.push(...renderMarkdownTokens(token.tokens, width, indent));
+        } else if ("text" in token && typeof token.text === "string") {
+          lines.push(...wrapWithPrefix("", sanitizeTerminalText(token.text), width, indent));
+        }
+    }
+  }
+  while (lines.at(-1) === "") lines.pop();
+  return lines.length > 0 ? lines : [""];
+}
+
+function renderInline(tokens: readonly Token[]): string {
+  return sanitizeTerminalText(tokens.map((token) => {
+    switch (token.type) {
+      case "codespan":
+        return `\`${(token as Tokens.Codespan).text}\``;
+      case "link": {
+        const link = token as Tokens.Link;
+        return `${renderInline(link.tokens)} (${link.href})`;
+      }
+      case "image": {
+        const image = token as Tokens.Image;
+        return `${image.text} (${image.href})`;
+      }
+      case "br":
+        return "\n";
+      default:
+        if ("tokens" in token && Array.isArray(token.tokens)) return renderInline(token.tokens);
+        return "text" in token && typeof token.text === "string" ? token.text : "";
+    }
+  }).join(""));
+}
+
+function wrapWithPrefix(prefix: string, value: string, width: number, indent: string): string[] {
+  const firstPrefix = `${indent}${prefix}`;
+  const continuation = " ".repeat(visibleWidth(firstPrefix));
+  const wrapped = wrapText(value, Math.max(1, width - visibleWidth(firstPrefix)));
+  return wrapped.map((line, index) => truncateToWidth(`${index === 0 ? firstPrefix : continuation}${line}`, width));
+}
+
+function allocateWidths(desired: readonly number[], available: number, minimum: number): number[] {
+  const widths = desired.map(() => minimum);
+  let remaining = Math.max(0, available - widths.length * minimum);
+  while (remaining > 0) {
+    const candidate = widths
+      .map((value, index) => ({ index, need: Math.max(0, (desired[index] ?? minimum) - value) }))
+      .sort((left, right) => right.need - left.need)[0];
+    if (!candidate || candidate.need === 0) break;
+    widths[candidate.index] = (widths[candidate.index] ?? minimum) + 1;
+    remaining -= 1;
+  }
+  return widths;
+}
+
+function parseUnifiedDiff(lines: readonly string[]): DiffEntry[] {
+  const entries: DiffEntry[] = [];
+  let oldLine: number | undefined;
+  let newLine: number | undefined;
+  for (const line of lines) {
+    const hunk = /^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@(.*)$/u.exec(line);
+    if (hunk) {
+      oldLine = Number(hunk[1]);
+      newLine = Number(hunk[2]);
+      entries.push({ kind: "hunk", text: line });
+    } else if (line.startsWith("diff --git ") || line.startsWith("--- ") || line.startsWith("+++ ") || line.startsWith("index ")) {
+      entries.push({ kind: "file", text: line });
+    } else if (oldLine !== undefined && newLine !== undefined && line.startsWith("+")) {
+      entries.push({ kind: "add", text: line.slice(1), newLine });
+      newLine += 1;
+    } else if (oldLine !== undefined && newLine !== undefined && line.startsWith("-")) {
+      entries.push({ kind: "delete", text: line.slice(1), oldLine });
+      oldLine += 1;
+    } else if (oldLine !== undefined && newLine !== undefined) {
+      entries.push({ kind: "context", text: line.startsWith(" ") ? line.slice(1) : line, oldLine, newLine });
+      oldLine += 1;
+      newLine += 1;
+    } else {
+      entries.push({ kind: "file", text: line });
+    }
+  }
+  return entries;
+}
+
+function foldDiffContext(entries: readonly DiffEntry[], maxContextLines: number): DiffEntry[] {
+  const output: DiffEntry[] = [];
+  for (let index = 0; index < entries.length;) {
+    if (entries[index]?.kind !== "context") {
+      output.push(entries[index] as DiffEntry);
+      index += 1;
+      continue;
+    }
+    let end = index;
+    while (entries[end]?.kind === "context") end += 1;
+    const run = entries.slice(index, end);
+    if (run.length > maxContextLines) {
+      const edge = Math.max(1, Math.floor(maxContextLines / 2));
+      output.push(...run.slice(0, edge));
+      output.push({ kind: "fold", text: `... ${run.length - edge * 2} unchanged lines ...` });
+      output.push(...run.slice(-edge));
+    } else {
+      output.push(...run);
+    }
+    index = end;
+  }
+  return output;
+}
+
+function formatDuration(durationMs: number): string {
+  if (durationMs < 1000) return `${Math.max(0, Math.round(durationMs))}ms`;
+  return `${(durationMs / 1000).toFixed(1)}s`;
+}
+
 function normalizeEditorText(value: string): string {
-  return value.replace(/\r\n?/gu, "\n");
+  return sanitizeTerminalText(value);
 }

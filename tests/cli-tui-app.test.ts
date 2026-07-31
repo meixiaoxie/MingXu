@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { CliTuiApp } from "../src/cli/tui-app.js";
 import type { CliRuntimeContext, CliRuntimeSnapshot } from "../src/cli/runtime-types.js";
@@ -323,5 +323,50 @@ describe("CliTuiApp", () => {
     expect(app.editor.selection).toEqual(selection);
     expect(app.editor.cursor).toBe(cursor);
     expect(app.editor.composition).toEqual({ text: "かな", start: 0, end: 2 });
+  });
+
+  it("confirms Agent Tree cancellation, reports the result, and preserves the composer at low height", async () => {
+    const cancelSubagents = vi.fn(async () => ({
+      sessionId: "session-1",
+      scope: "subtree" as const,
+      status: "accepted" as const,
+      targets: [{ sessionId: "session-1", status: "accepted" as const, reason: "Cancelled from Agent Tree" }],
+    }));
+    const runtime: CliRuntimeContext = {
+      createSession: () => createFakeSession(),
+      listSessions: async () => "",
+      listRecentSessions: async () => [],
+      snapshot: async () => createRuntimeSnapshot(),
+      cancelSubagents,
+      close: async () => undefined,
+    };
+    const app = new CliTuiApp({
+      runtime,
+      terminal: createFakeTerminal(),
+      session: createFakeSession(),
+      modelKey: "primary",
+      sessionId: "session-1",
+    });
+
+    await app.refreshSnapshot();
+    app.handleInput({ sequence: "draft", name: "paste" });
+    await app.openAgentsPanel();
+    app.handleInput({ sequence: "x", name: "x" });
+    expect(app.activePanel?.title).toBe("cancel agent");
+    expect(app.render(60, 10).at(-1)).toContain("> draft");
+
+    app.handleInput({ sequence: "", name: "down" });
+    app.handleInput({ sequence: "", name: "enter" });
+    await vi.waitFor(() => expect(app.activePanel?.title).toBe("cancel result"));
+    expect(cancelSubagents).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      subtree: true,
+      reason: "Cancelled from Agent Tree",
+    });
+    expect(app.render(60, 24).join("\n")).toContain("session-1: accepted");
+
+    app.handleInput({ sequence: "", name: "escape" });
+    expect(app.activePanel?.title).toBe("agents");
+    expect(app.editor.value).toBe("draft");
   });
 });

@@ -252,6 +252,9 @@ export {
 } from "./subagents/index.js";
 export type {
   CreateSubagentSessionRequest,
+  SubagentCancelRequest,
+  SubagentCancelResult,
+  SubagentCancelTargetResult,
   SubagentDependencies,
   SubagentRuntimeOptions,
   SubagentSpawnRequest,
