@@ -5,6 +5,7 @@ import {
   type TerminalLifecycleOptions,
   type TerminalProcessHandlers,
 } from "./terminal-lifecycle.js";
+import type { KeyInput } from "./types.js";
 
 const BRACKETED_PASTE_START = "\x1b[200~";
 const BRACKETED_PASTE_END = "\x1b[201~";
@@ -15,7 +16,7 @@ export interface TerminalSize {
 }
 
 export interface TerminalKeyListener {
-  (input: { sequence: string; name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean }): void;
+  (input: KeyInput): void;
 }
 
 export class ProcessTerminal {
@@ -167,15 +168,22 @@ export class ProcessTerminal {
       this.#pasteBuffer += sequence;
       return;
     }
-    const input: { sequence: string; name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean } = { sequence };
+    const input: {
+      sequence: string;
+      name?: string;
+      ctrl?: boolean;
+      meta?: boolean;
+      shift?: boolean;
+    } = { sequence };
     if (key.name !== undefined) input.name = key.name;
     if (key.ctrl !== undefined) input.ctrl = key.ctrl;
     if (key.meta !== undefined) input.meta = key.meta;
     if (key.shift !== undefined) input.shift = key.shift;
-    this.#emitKeypress(input);
+    const composition = (key as import("./types.js").KeyInput).composition;
+    this.#emitKeypress(composition === undefined ? input : { ...input, composition });
   }
 
-  #emitKeypress(input: { sequence: string; name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean }): void {
+  #emitKeypress(input: KeyInput): void {
     for (const listener of this.#keyListeners) listener(input);
   }
 }

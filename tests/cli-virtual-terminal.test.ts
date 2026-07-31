@@ -417,4 +417,39 @@ describe("CLI VirtualTerminal", () => {
     await expect(startPromise).resolves.toBe(0);
     expect(exitTerminal.writes.at(-1)).toBe("\x1b[?2026l\x1b[?2004l\x1b[?25h");
   });
+
+  it("keeps IME preedit out of the prompt until ProcessTerminal forwards a commit", async () => {
+    const virtual = createVirtualTerminal({ columns: 80, rows: 24 });
+    const session = createSession();
+    const runtime: CliRuntimeContext = {
+      createSession: () => session,
+      listSessions: async () => "",
+      listRecentSessions: async () => [],
+      snapshot: async () => createSnapshot(),
+      close: async () => undefined,
+    };
+    const app = new CliTuiApp({
+      runtime,
+      terminal: virtual.terminal,
+      session,
+      modelKey: "primary",
+      sessionId: "session-1",
+    });
+
+    const running = app.start();
+    await virtual.flush();
+    virtual.press({ sequence: "", composition: "start" });
+    virtual.press({ sequence: "中文", composition: "update" });
+    await virtual.flush();
+    expect(app.editor.value).toBe("");
+    expect(app.editor.composition).toEqual({ text: "中文", start: 0, end: 0 });
+    expect(await virtual.readText()).toContain("中文");
+
+    virtual.press({ sequence: "中文", composition: "commit" });
+    await virtual.flush();
+    expect(app.editor.value).toBe("中文");
+    expect(app.editor.composition).toBeUndefined();
+    app.exit();
+    await expect(running).resolves.toBe(0);
+  });
 });

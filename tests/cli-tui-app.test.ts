@@ -284,4 +284,44 @@ describe("CliTuiApp", () => {
     expect(restored).toContain("showing 1-4 of 4");
     expect(restored).not.toContain("title: preset coding");
   });
+
+  it("preserves composer selection, cursor, and preedit through resize and overlays", async () => {
+    const runtime: CliRuntimeContext = {
+      createSession: () => createFakeSession(),
+      listSessions: async () => "",
+      listRecentSessions: async () => [],
+      snapshot: async () => createRuntimeSnapshot(),
+      close: async () => undefined,
+    };
+    const app = new CliTuiApp({
+      runtime,
+      terminal: createFakeTerminal(),
+      session: createFakeSession(),
+      modelKey: "primary",
+      sessionId: "session-1",
+    });
+
+    await app.refreshSnapshot();
+    app.handleInput({ sequence: "中文🙂draft", name: "paste" });
+    app.handleInput({ sequence: "", name: "a", ctrl: true });
+    app.handleInput({ sequence: "", name: "right", shift: true });
+    app.handleInput({ sequence: "", name: "right", shift: true });
+    const selection = app.editor.selection;
+    const cursor = app.editor.cursor;
+    app.handleInput({ sequence: "かな", composition: "update" });
+
+    for (const width of [60, 80, 120]) {
+      app.render(width, 24);
+      expect(app.editor.selection).toEqual(selection);
+      expect(app.editor.cursor).toBe(cursor);
+      expect(app.editor.composition).toEqual({ text: "かな", start: 0, end: 2 });
+    }
+
+    await app.openHelpPanel();
+    app.handleInput({ sequence: "", name: "escape" });
+    expect(app.activePanel).toBeUndefined();
+    expect(app.editor.selection).toEqual(selection);
+    expect(app.editor.cursor).toBe(cursor);
+    expect(app.editor.composition).toEqual({ text: "かな", start: 0, end: 2 });
+  });
 });

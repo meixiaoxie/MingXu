@@ -4,6 +4,7 @@ export interface KeyInput {
   readonly ctrl?: boolean;
   readonly meta?: boolean;
   readonly shift?: boolean;
+  readonly composition?: "start" | "update" | "commit" | "cancel";
 }
 
 export interface Component {
@@ -42,3 +43,7 @@ export interface OverlayFrame extends Component {
 }
 
 export const CURSOR_MARKER = "\u001b_pi:c\u0007";
+export const SELECTION_START = "\u001b[7m";
+export const SELECTION_END = "\u001b[27m";
+export const COMPOSITION_START = "\u001b[4m";
+export const COMPOSITION_END = "\u001b[24m";

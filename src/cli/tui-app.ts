@@ -103,6 +103,7 @@ export class CliTuiApp {
     ]);
     this.#editor = new Editor({
       prompt: "> ",
+      placeholder: "Ctrl+J inserts a newline",
       completionProvider: (value) => suggestChatCommands(value).map((command) => ({
         id: command.name,
         label: command.usage,

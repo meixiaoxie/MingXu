@@ -101,4 +101,59 @@ describe("tui components", () => {
     expect(input.setRawMode).toHaveBeenNthCalledWith(1, true);
     expect(input.setRawMode).toHaveBeenNthCalledWith(2, false);
   });
+
+  it("forwards composition metadata without converting preedit text into a paste", () => {
+    const input = Object.assign(new EventEmitter(), {
+      isTTY: true,
+      resume() {},
+      setRawMode() {},
+    }) as unknown as NodeJS.ReadStream;
+    const output = Object.assign(new EventEmitter(), {
+      isTTY: true,
+      columns: 80,
+      rows: 24,
+      write() { return true; },
+    }) as unknown as NodeJS.WriteStream;
+    const terminal = new ProcessTerminal(input, output);
+    const keys: Array<{ readonly sequence: string; readonly composition?: string }> = [];
+    terminal.onKeypress((key) => keys.push(key));
+
+    terminal.enterRawMode();
+    input.emit("keypress", "中文", { sequence: "中文", composition: "update" });
+    terminal.restore();
+
+    expect(keys).toEqual([{ sequence: "中文", composition: "update" }]);
+  });
+
+  it("uses one bracketed paste transaction when replacing an editor selection", () => {
+    const input = Object.assign(new EventEmitter(), {
+      isTTY: true,
+      resume() {},
+      setRawMode() {},
+    }) as unknown as NodeJS.ReadStream;
+    const output = Object.assign(new EventEmitter(), {
+      isTTY: true,
+      columns: 80,
+      rows: 24,
+      write() { return true; },
+    }) as unknown as NodeJS.WriteStream;
+    const terminal = new ProcessTerminal(input, output);
+    const editor = new Editor({ prompt: "> " });
+    editor.handleInput({ sequence: "中文🙂", name: "paste" });
+    editor.handleInput({ sequence: "", name: "a", ctrl: true });
+    editor.handleInput({ sequence: "", name: "right", shift: true });
+    editor.handleInput({ sequence: "", name: "right", shift: true });
+    terminal.onKeypress((key) => editor.handleInput(key));
+
+    terminal.enterRawMode();
+    input.emit("keypress", "\x1b[200~", { sequence: "\x1b[200~" });
+    input.emit("keypress", "日本", { sequence: "日本" });
+    input.emit("keypress", "\x1b[201~", { sequence: "\x1b[201~" });
+    terminal.restore();
+
+    expect(editor.value).toBe("日本🙂");
+    editor.handleInput({ sequence: "", name: "z", ctrl: true });
+    expect(editor.value).toBe("中文🙂");
+    expect(editor.selection).toEqual({ anchor: 0, focus: 2, start: 0, end: 2 });
+  });
 });

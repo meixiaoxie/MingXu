@@ -52,6 +52,7 @@ export class ChatInputController {
     this.#active = true;
     this.#editor = new Editor({
       prompt,
+      placeholder: "Ctrl+J inserts a newline",
       completionProvider: (value) => suggestChatCommands(value).map((command) => ({
         id: command.name,
         label: command.usage,
@@ -201,5 +202,6 @@ function createKeyInput(sequence: string, key: import("node:readline").Key): Key
   if (key.shift !== undefined) {
     input.shift = key.shift;
   }
-  return input;
+  const composition = (key as KeyInput).composition;
+  return composition === undefined ? input : { ...input, composition };
 }

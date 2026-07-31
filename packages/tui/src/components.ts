@@ -1,4 +1,13 @@
-import { CURSOR_MARKER, type Component, type ComponentAction, type KeyInput } from "./types.js";
+import {
+  COMPOSITION_END,
+  COMPOSITION_START,
+  CURSOR_MARKER,
+  SELECTION_END,
+  SELECTION_START,
+  type Component,
+  type ComponentAction,
+  type KeyInput,
+} from "./types.js";
 import { padToWidth, splitGraphemes, truncateToWidth, visibleWidth, wrapText } from "./strings.js";
 
 export interface TextOptions {
@@ -137,6 +146,20 @@ interface CursorPosition {
 interface EditorSnapshot {
   readonly value: string;
   readonly cursor: number;
+  readonly selectionAnchor: number | undefined;
+}
+
+export interface EditorSelection {
+  readonly anchor: number;
+  readonly focus: number;
+  readonly start: number;
+  readonly end: number;
+}
+
+export interface EditorCompositionState {
+  readonly text: string;
+  readonly start: number;
+  readonly end: number;
 }
 
 export class Editor implements Component {
@@ -147,6 +170,8 @@ export class Editor implements Component {
   readonly #promptGraphemeCount: number;
   #value = "";
   #cursor = 0;
+  #selectionAnchor: number | undefined;
+  #composition: EditorCompositionState | undefined;
   #historyIndex: number | undefined;
   #draftBeforeHistory: string | undefined;
   #completionItems: readonly SelectListItem[] = [];
@@ -170,9 +195,31 @@ export class Editor implements Component {
     return this.#value;
   }
 
+  get cursor(): number {
+    return this.#cursor;
+  }
+
+  get selection(): EditorSelection | undefined {
+    if (this.#selectionAnchor === undefined || this.#selectionAnchor === this.#cursor) {
+      return undefined;
+    }
+    return {
+      anchor: this.#selectionAnchor,
+      focus: this.#cursor,
+      start: Math.min(this.#selectionAnchor, this.#cursor),
+      end: Math.max(this.#selectionAnchor, this.#cursor),
+    };
+  }
+
+  get composition(): EditorCompositionState | undefined {
+    return this.#composition;
+  }
+
   clear(): void {
     this.#value = "";
     this.#cursor = 0;
+    this.#selectionAnchor = undefined;
+    this.#composition = undefined;
     this.#historyIndex = undefined;
     this.#draftBeforeHistory = undefined;
     this.#menuVisible = false;
@@ -195,6 +242,18 @@ export class Editor implements Component {
   invalidate(): void {}
 
   handleInput(input: KeyInput): ComponentAction | void {
+    if (input.composition) {
+      this.handleComposition(input.composition, input.sequence);
+      return { type: "none" };
+    }
+
+    if (this.#composition) {
+      if (input.name === "escape") {
+        this.handleComposition("cancel");
+      }
+      return { type: "none" };
+    }
+
     if (input.ctrl && input.name === "c") {
       return { type: "cancel" };
     }
@@ -240,29 +299,29 @@ export class Editor implements Component {
     }
 
     if (input.name === "left") {
-      this.#cursor = Math.max(0, this.#cursor - 1);
+      this.#moveHorizontal(-1, input.shift === true);
       this.#syncCompletionState();
       return { type: "none" };
     }
 
     if (input.name === "right") {
-      this.#cursor = Math.min(this.#valueGraphemeCount(), this.#cursor + 1);
+      this.#moveHorizontal(1, input.shift === true);
       this.#syncCompletionState();
       return { type: "none" };
     }
 
     if (input.name === "home" || (input.ctrl && input.name === "a")) {
-      this.#cursor = input.ctrl && input.name === "a"
+      this.#setCursor(input.ctrl && input.name === "a"
         ? 0
-        : this.#currentLineRange().start;
+        : this.#currentLineRange().start, input.shift === true);
       this.#syncCompletionState();
       return { type: "none" };
     }
 
     if (input.name === "end" || (input.ctrl && input.name === "e")) {
-      this.#cursor = input.ctrl && input.name === "e"
+      this.#setCursor(input.ctrl && input.name === "e"
         ? this.#valueGraphemeCount()
-        : this.#currentLineRange().end;
+        : this.#currentLineRange().end, input.shift === true);
       this.#syncCompletionState();
       return { type: "none" };
     }
@@ -270,9 +329,9 @@ export class Editor implements Component {
     if (input.name === "up") {
       if (this.#menuVisible && this.#completionItems.length > 0) {
         this.#completionIndex = (this.#completionIndex - 1 + this.#completionItems.length) % this.#completionItems.length;
-      } else if (!this.#moveVertical(-1)) {
+      } else if (!this.#moveVertical(-1, input.shift === true) && !input.shift) {
         this.#historyUp();
-      } else {
+      } else if (!input.shift || this.#layout.length > 0) {
         this.#syncCompletionState();
       }
       return { type: "none" };
@@ -281,9 +340,9 @@ export class Editor implements Component {
     if (input.name === "down") {
       if (this.#menuVisible && this.#completionItems.length > 0) {
         this.#completionIndex = (this.#completionIndex + 1) % this.#completionItems.length;
-      } else if (!this.#moveVertical(1)) {
+      } else if (!this.#moveVertical(1, input.shift === true) && !input.shift) {
         this.#historyDown();
-      } else {
+      } else if (!input.shift || this.#layout.length > 0) {
         this.#syncCompletionState();
       }
       return { type: "none" };
@@ -316,6 +375,41 @@ export class Editor implements Component {
     return undefined;
   }
 
+  handleComposition(phase: "start" | "update" | "commit" | "cancel", text = ""): void {
+    switch (phase) {
+      case "start":
+        if (!this.#composition) {
+          const selection = this.selection;
+          this.#composition = {
+            text: "",
+            start: selection?.start ?? this.#cursor,
+            end: selection?.end ?? this.#cursor,
+          };
+        }
+        break;
+      case "update":
+        if (!this.#composition) this.handleComposition("start");
+        if (this.#composition) {
+          this.#composition = { ...this.#composition, text: normalizeEditorText(text) };
+        }
+        break;
+      case "commit": {
+        const composition = this.#composition;
+        this.#composition = undefined;
+        if (composition) {
+          this.#replaceRange(composition.start, composition.end, text);
+        } else {
+          this.#insert(text);
+        }
+        break;
+      }
+      case "cancel":
+        this.#composition = undefined;
+        break;
+    }
+    this.#syncCompletionState();
+  }
+
   render(width: number): string[] {
     this.#renderWidth = Math.max(1, width);
     this.#syncCompletionState();
@@ -338,42 +432,45 @@ export class Editor implements Component {
     if (!normalized) {
       return;
     }
-    this.#recordUndo();
-    this.#completionSuppressed = false;
-    const value = splitGraphemes(this.#value);
-    const inserted = splitGraphemes(normalized);
-    value.splice(this.#cursor, 0, ...inserted);
-    this.#value = value.join("");
-    this.#cursor += inserted.length;
-    this.#historyIndex = undefined;
-    this.#draftBeforeHistory = undefined;
-    this.#syncCompletionState();
+    const selection = this.selection;
+    this.#replaceRange(selection?.start ?? this.#cursor, selection?.end ?? this.#cursor, normalized);
   }
 
   #deleteBackward(): void {
+    const selection = this.selection;
+    if (selection) {
+      this.#replaceRange(selection.start, selection.end, "");
+      return;
+    }
     if (this.#cursor === 0) {
       return;
     }
-    this.#recordUndo();
-    this.#completionSuppressed = false;
-    const value = splitGraphemes(this.#value);
-    value.splice(this.#cursor - 1, 1);
-    this.#value = value.join("");
-    this.#cursor -= 1;
-    this.#historyIndex = undefined;
-    this.#draftBeforeHistory = undefined;
-    this.#syncCompletionState();
+    this.#replaceRange(this.#cursor - 1, this.#cursor, "");
   }
 
   #deleteForward(): void {
+    const selection = this.selection;
+    if (selection) {
+      this.#replaceRange(selection.start, selection.end, "");
+      return;
+    }
     const value = splitGraphemes(this.#value);
     if (this.#cursor >= value.length) {
       return;
     }
+    this.#replaceRange(this.#cursor, this.#cursor + 1, "");
+  }
+
+  #replaceRange(start: number, end: number, text: string): void {
+    const value = splitGraphemes(this.#value);
+    const normalized = normalizeEditorText(text);
+    const inserted = splitGraphemes(normalized);
     this.#recordUndo();
     this.#completionSuppressed = false;
-    value.splice(this.#cursor, 1);
+    value.splice(start, Math.max(0, end - start), ...inserted);
     this.#value = value.join("");
+    this.#cursor = start + inserted.length;
+    this.#selectionAnchor = undefined;
     this.#historyIndex = undefined;
     this.#draftBeforeHistory = undefined;
     this.#syncCompletionState();
@@ -391,6 +488,7 @@ export class Editor implements Component {
     this.#historyIndex = nextIndex;
     this.#value = this.#history[nextIndex] ?? "";
     this.#cursor = this.#valueGraphemeCount();
+    this.#selectionAnchor = undefined;
     this.#syncCompletionState();
   }
 
@@ -404,12 +502,14 @@ export class Editor implements Component {
       this.#value = this.#draftBeforeHistory ?? "";
       this.#draftBeforeHistory = undefined;
       this.#cursor = this.#valueGraphemeCount();
+      this.#selectionAnchor = undefined;
       this.#syncCompletionState();
       return;
     }
     this.#historyIndex += 1;
     this.#value = this.#history[this.#historyIndex] ?? "";
     this.#cursor = this.#valueGraphemeCount();
+    this.#selectionAnchor = undefined;
     this.#syncCompletionState();
   }
 
@@ -425,6 +525,7 @@ export class Editor implements Component {
     const replacement = splitGraphemes(`/${item.id}${separator}`);
     this.#value = [...replacement, ...suffix].join("");
     this.#cursor = replacement.length;
+    this.#selectionAnchor = undefined;
     this.#completionSuppressed = true;
     this.#menuVisible = false;
     this.#completionItems = [];
@@ -432,7 +533,11 @@ export class Editor implements Component {
   }
 
   #recordUndo(): void {
-    this.#undoStack.push({ value: this.#value, cursor: this.#cursor });
+    this.#undoStack.push({
+      value: this.#value,
+      cursor: this.#cursor,
+      selectionAnchor: this.#selectionAnchor,
+    });
     if (this.#undoStack.length > 100) {
       this.#undoStack.shift();
     }
@@ -444,7 +549,11 @@ export class Editor implements Component {
     if (!snapshot) {
       return;
     }
-    this.#redoStack.push({ value: this.#value, cursor: this.#cursor });
+    this.#redoStack.push({
+      value: this.#value,
+      cursor: this.#cursor,
+      selectionAnchor: this.#selectionAnchor,
+    });
     this.#restoreSnapshot(snapshot);
   }
 
@@ -453,13 +562,19 @@ export class Editor implements Component {
     if (!snapshot) {
       return;
     }
-    this.#undoStack.push({ value: this.#value, cursor: this.#cursor });
+    this.#undoStack.push({
+      value: this.#value,
+      cursor: this.#cursor,
+      selectionAnchor: this.#selectionAnchor,
+    });
     this.#restoreSnapshot(snapshot);
   }
 
   #restoreSnapshot(snapshot: EditorSnapshot): void {
     this.#value = snapshot.value;
     this.#cursor = snapshot.cursor;
+    this.#selectionAnchor = snapshot.selectionAnchor;
+    this.#composition = undefined;
     this.#historyIndex = undefined;
     this.#draftBeforeHistory = undefined;
     this.#completionSuppressed = false;
@@ -467,7 +582,7 @@ export class Editor implements Component {
   }
 
   #syncCompletionState(): void {
-    if (this.#completionSuppressed) {
+    if (this.#composition || this.selection || this.#completionSuppressed) {
       this.#menuVisible = false;
       this.#completionItems = [];
       this.#completionIndex = 0;
@@ -492,6 +607,27 @@ export class Editor implements Component {
     return splitGraphemes(this.#value).length;
   }
 
+  #setCursor(cursor: number, extendSelection = false): void {
+    const bounded = Math.max(0, Math.min(this.#valueGraphemeCount(), cursor));
+    if (extendSelection) {
+      if (this.#selectionAnchor === undefined) this.#selectionAnchor = this.#cursor;
+      this.#cursor = bounded;
+      if (this.#selectionAnchor === this.#cursor) this.#selectionAnchor = undefined;
+      return;
+    }
+    this.#cursor = bounded;
+    this.#selectionAnchor = undefined;
+  }
+
+  #moveHorizontal(delta: -1 | 1, extendSelection: boolean): void {
+    const selection = this.selection;
+    if (!extendSelection && selection) {
+      this.#setCursor(delta < 0 ? selection.start : selection.end);
+      return;
+    }
+    this.#setCursor(this.#cursor + delta, extendSelection);
+  }
+
   #currentLineRange(): { start: number; end: number } {
     const segments = splitGraphemes(this.#value);
     let start = 0;
@@ -512,7 +648,7 @@ export class Editor implements Component {
     return { start, end };
   }
 
-  #moveVertical(delta: number): boolean {
+  #moveVertical(delta: number, extendSelection = false): boolean {
     if (this.#layout.length === 0) {
       return false;
     }
@@ -549,40 +685,41 @@ export class Editor implements Component {
       return false;
     }
 
-    this.#cursor = Math.max(0, chosenIndex - this.#promptGraphemeCount);
+    this.#setCursor(Math.max(0, chosenIndex - this.#promptGraphemeCount), extendSelection);
     this.#syncCompletionState();
     return true;
   }
 
   #buildRenderedLines(width: number): string[] {
-    if (this.#value.length === 0) {
+    if (this.#value.length === 0 && !this.#composition) {
       this.#layout = [];
       return wrapText(`${this.#prompt}${this.#placeholder}`, width);
     }
 
-    const display = `${this.#prompt}${this.#value}`;
-    const segments = splitGraphemes(display);
+    const promptSegments = splitGraphemes(this.#prompt);
+    const valueSegments = splitGraphemes(this.#value);
+    const segments = [...promptSegments, ...valueSegments];
     const cursorIndex = this.#promptGraphemeCount + this.#cursor;
     const positions = new Array<CursorPosition>(segments.length + 1);
+    const selection = this.selection;
+    const selectionStart = selection ? this.#promptGraphemeCount + selection.start : undefined;
+    const selectionEnd = selection ? this.#promptGraphemeCount + selection.end : undefined;
+    const composition = this.#composition;
+    const compositionStart = composition ? this.#promptGraphemeCount + composition.start : undefined;
+    const compositionEnd = composition ? this.#promptGraphemeCount + composition.end : undefined;
     const lines: string[] = [];
     let currentLine = "";
     let row = 0;
     let column = 0;
     positions[0] = { row, column };
 
-    for (let index = 0; index < segments.length; index += 1) {
-      if (index === cursorIndex) {
-        currentLine += CURSOR_MARKER;
-      }
-
-      const segment = segments[index] ?? "";
+    const append = (segment: string): void => {
       if (segment === "\n") {
         lines.push(currentLine);
         currentLine = "";
         row += 1;
         column = 0;
-        positions[index + 1] = { row, column };
-        continue;
+        return;
       }
 
       const segmentWidth = visibleWidth(segment);
@@ -595,11 +732,37 @@ export class Editor implements Component {
 
       currentLine += segment;
       column += segmentWidth;
-      positions[index + 1] = { row, column };
-    }
+    };
 
-    if (cursorIndex === segments.length) {
-      currentLine += CURSOR_MARKER;
+    for (let index = 0; index <= segments.length; index += 1) {
+      if (compositionStart === index && composition) {
+        for (const segment of splitGraphemes(composition.text)) {
+          append(segment === "\n" ? segment : `${COMPOSITION_START}${segment}${COMPOSITION_END}`);
+        }
+        currentLine += CURSOR_MARKER;
+      }
+
+      if (index === segments.length) {
+        if (!composition && index === cursorIndex) currentLine += CURSOR_MARKER;
+        break;
+      }
+
+      if (compositionStart !== undefined && compositionEnd !== undefined && index >= compositionStart && index < compositionEnd) {
+        positions[index + 1] = { row, column };
+        continue;
+      }
+
+      if ((!composition || cursorIndex < (compositionStart ?? 0) || cursorIndex > (compositionEnd ?? segments.length)) && index === cursorIndex) {
+        currentLine += CURSOR_MARKER;
+      }
+
+      const segment = segments[index] ?? "";
+      const highlighted = selectionStart !== undefined
+        && selectionEnd !== undefined
+        && index >= selectionStart
+        && index < selectionEnd;
+      append(highlighted && segment !== "\n" ? `${SELECTION_START}${segment}${SELECTION_END}` : segment);
+      positions[index + 1] = { row, column };
     }
 
     lines.push(currentLine);

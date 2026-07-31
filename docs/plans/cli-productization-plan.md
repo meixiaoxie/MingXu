@@ -24,7 +24,7 @@
 | --- | --- | --- | --- | --- |
 | R1 终端渲染与真实 scrollback | P0 | 完成历史/活动区域分离和成熟差分渲染包装 | 无 | 已完成（2026-07-31） |
 | R2 终端生命周期与异常恢复 | P0 | 所有退出和降级路径对称恢复终端 | 可与 R1 并行 | 已完成（2026-07-31） |
-| R3 IME、选择区与输入边界 | P0 | 完成真实中文输入法和选择编辑体验 | R1 的 viewport 协议 | 待完成 |
+| R3 IME、选择区与输入边界 | P0 | 完成真实中文输入法和选择编辑体验 | R1 的 viewport 协议 | 已完成（2026-07-31） |
 | R4 产品组件与复杂面板 | P1 | 完成 Markdown、Diff、CommandBlock 和面板交互 | R1、R3 | 待完成 |
 | R5 CLI 职责拆分与 Session replay | P0 | 完成运行适配、命令、屏幕和回放边界 | 稳定事件投影 | 待完成 |
 | R6 coding-tools 两阶段写入 | P0 | 写入前预览，审批后原子提交 | R4、R5 | 待完成 |
@@ -110,7 +110,7 @@ R2 已于 2026-07-31 完成，成品 CLI 的其他工作包仍保持独立验收
 - `CliTuiApp` 统一处理正常退出、Ctrl+C、Ctrl+D、Provider/插件错误、SIGINT、SIGTERM、SIGHUP、未捕获异常、未处理 rejection、交互 stdout EPIPE 和 resize 同时退出；Session 结束后会移除终端与进程监听器。
 - 子进程测试结合 `@xterm/headless` 验证五类进程事件最终关闭同步输出和 bracketed paste、显示光标并恢复 raw mode；应用级测试覆盖重复 Session 无监听器增长、初始化 EPIPE 恢复顺序以及 stdout/stderr 断管行为。
 - R2 聚焦测试共 5 个文件、67 个用例通过；`pnpm typecheck`、`pnpm test`（58 个文件、274 个用例）和 `pnpm build` 通过。
-- 本状态不包含 R3 的 IME/选择区、R4-R7 或第 14 节最终发布门槛，也不代表成品 CLI 已完成。
+- R2 的完成证据不承担 IME、选择区或输入边界验收；这些证据独立记录在 R3，R1-R3 均不代表成品 CLI 已完成。
 
 ## 6. R3：IME、选择区与输入边界
 
@@ -139,6 +139,17 @@ R2 已于 2026-07-31 完成，成品 CLI 的其他工作包仍保持独立验收
 - IME composition 不产生半字符、重复字符或意外提交。
 - 选择区操作始终按 grapheme 边界执行。
 - resize、历史切换和 Overlay 往返后草稿、选择和光标位置保持一致。
+
+### 完成状态
+
+R3 已于 2026-07-31 完成，后续产品组件、运行时边界和发布验收仍按独立工作包推进：
+
+- `Editor` 增加基于 grapheme 索引的 anchor/focus 选择模型，插入、bracketed paste、Backspace、Delete、Home、End、垂直移动、撤销与重做均以选择范围作为单一编辑事务，不会拆分组合字符、CJK 字符或 ZWJ emoji。
+- 输入协议新增 composition start/update/commit/cancel。预编辑文本以本地 underline 渲染，保持在草稿之外并关闭 completion；只有 commit 才一次性替换选择区，cancel 保留原草稿和选择，Enter 不会提交中间态。
+- `ProcessTerminal` 与 `ChatInputController` 透传 composition 元数据；虚拟终端验证了 `ProcessTerminal -> CliTuiApp -> Editor` 链路。所有终端仍可通过普通 committed text 正常输入 IME 结果。
+- 60、80、120 列渲染、Overlay 往返和 resize 后均保持草稿、选择、逻辑光标和预编辑状态；`Ctrl+J inserts a newline` 作为无法区分 Shift+Enter 时的一致替代提示。
+- R3 聚焦测试共 5 个文件、32 个用例通过，覆盖中文、日文、韩文、组合音标、ZWJ emoji、bracketed paste、composition、选择和 committed-text 终端样本；`pnpm typecheck`、`pnpm test`（58 个文件、288 个用例）和 `pnpm build` 通过。
+- 本状态不包含 R4-R7、跨平台实机发布验收或第 14 节最终完成定义，也不代表成品 CLI 已完成。
 
 ## 7. R4：产品组件与复杂面板
 
@@ -335,7 +346,7 @@ pnpm audit --prod
 
 在第 14 节全部勾选之前，只使用以下表述：
 
-> MingXu 已具备可运行的 Agent 核心、CLI 主链、真实终端 scrollback、完整终端生命周期恢复、TUI 产品原型、真实 coding-tools 插件和安装烟测，正在完成输入法边界、两阶段写入和跨平台发布验收。
+> MingXu 已具备可运行的 Agent 核心、CLI 主链、真实终端 scrollback、完整终端生命周期恢复、IME 与选择编辑边界、TUI 产品原型、真实 coding-tools 插件和安装烟测，正在完成产品组件、两阶段写入和跨平台发布验收。
 
 全部通过以后，才可以使用：
 

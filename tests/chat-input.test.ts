@@ -55,4 +55,26 @@ describe("ChatInputController", () => {
 
     controller.close();
   });
+
+  it("does not submit IME preedit text before the composition commit", async () => {
+    const input = createInputStream();
+    const { output, writes } = createOutputStream();
+    const controller = new ChatInputController({
+      input,
+      output,
+      enableRawMode: true,
+    });
+
+    const linePromise = controller.readLine("> ");
+    input.emit("keypress", "", { composition: "start" });
+    input.emit("keypress", "日本", { composition: "update" });
+    input.emit("keypress", "", { name: "enter" });
+    await Promise.resolve();
+    expect(writes.join("")).toContain("\x1b[4m日\x1b[24m");
+
+    input.emit("keypress", "日本", { composition: "commit" });
+    input.emit("keypress", "", { name: "enter" });
+    await expect(linePromise).resolves.toBe("日本");
+    controller.close();
+  });
 });
