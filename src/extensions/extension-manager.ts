@@ -68,6 +68,7 @@ export class ExtensionManager {
   readonly #adapterRegistry: ExtensionAdapterRegistry;
   readonly #temporaryEnabled = new Set<string>();
   readonly #temporaryDisabled = new Set<string>();
+  readonly #activeLoaders = new Set<PluginLoader>();
 
   constructor(options: ExtensionManagerOptions) {
     this.#options = options;
@@ -171,12 +172,14 @@ export class ExtensionManager {
     if (options.temporary === true) {
       this.#temporaryEnabled.delete(id);
       this.#temporaryDisabled.add(id);
+      await this.#unloadFromActiveLoaders(id);
       return this.#withEnabledState(record, false);
     }
     const next = this.#withEnabledState(record, false);
     await this.#writeLockRecord(scope, next);
     this.#temporaryEnabled.delete(id);
     this.#temporaryDisabled.delete(id);
+    await this.#unloadFromActiveLoaders(id);
     return next;
   }
 
@@ -185,6 +188,7 @@ export class ExtensionManager {
     if (record.enabled) {
       throw new Error(`Extension must be disabled before removal: ${id}`);
     }
+    await this.#unloadFromActiveLoaders(id);
     const scopeRoot = this.#scopeRoot(scope);
     const installRoot = resolve(scopeRoot, "extensions", id);
     const backupPath = await maybeRenameExisting(installRoot, `${installRoot}.rm-${process.pid}-${Date.now()}`);
@@ -238,15 +242,26 @@ export class ExtensionManager {
   }
 
   async loadEnabledExtensions(loader: PluginLoader, scope?: "user" | "project"): Promise<readonly string[]> {
+    this.#activeLoaders.add(loader);
     const records = await this.#readRecords(scope);
     const loaded: string[] = [];
     for (const record of records) {
       if (!record.enabled) continue;
+      if (loader.has(record.id)) {
+        loaded.push(record.id);
+        continue;
+      }
       const plugin = await this.#adapterRegistry.load(record.packageRoot, record.source);
       await loader.load(plugin);
       loaded.push(record.id);
     }
     return loaded;
+  }
+
+  async #unloadFromActiveLoaders(id: string): Promise<void> {
+    for (const loader of this.#activeLoaders) {
+      await loader.unload(id);
+    }
   }
 
   async inspectLock(scope: "user" | "project"): Promise<ExtensionLockFile> {

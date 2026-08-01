@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { describe, expect, it, afterEach } from "vitest";
+import { describe, expect, it, afterEach, vi } from "vitest";
 
 import { PluginLoader, resolvePluginLoadRequest } from "../src/plugins/plugin-loader.js";
 
@@ -31,6 +31,46 @@ afterEach(async () => {
 });
 
 describe("PluginLoader", () => {
+  it("deactivates, unregisters, and disposes a loaded plugin", async () => {
+    const registeredTools: RegisteredTool[] = [];
+    const deactivate = vi.fn(async () => undefined);
+    const dispose = vi.fn(async () => undefined);
+    const loader = new PluginLoader({
+      registerTool(tool) {
+        registeredTools.push(tool as RegisteredTool);
+      },
+      unregisterTool(name) {
+        const index = registeredTools.findIndex((tool) => tool.name === name);
+        if (index < 0) return false;
+        registeredTools.splice(index, 1);
+        return true;
+      },
+    });
+    await loader.load({
+      name: "lifecycle-plugin",
+      manifest: {
+        apiVersion: "mingxu/plugin-v1",
+        id: "lifecycle-id",
+        name: "Lifecycle",
+        version: "1.0.0",
+        kind: "tool",
+        contributions: [],
+      },
+      setup(context) {
+        context.registerTool({ name: "lifecycle-tool", description: "test", inputSchema: {} });
+      },
+      deactivate,
+      dispose,
+    });
+
+    await expect(loader.unload("lifecycle-id")).resolves.toBe(true);
+    expect(deactivate).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(registeredTools).toEqual([]);
+    expect(loader.list()).toEqual([]);
+    await expect(loader.unload("lifecycle-id")).resolves.toBe(false);
+  });
+
   it("loads a valid local plugin and exposes it in the registry", async () => {
     const root = await createTempRoot("mingxu-plugin-loader-");
     const modulePath = await writePluginModule(root, "valid-plugin.mjs", `

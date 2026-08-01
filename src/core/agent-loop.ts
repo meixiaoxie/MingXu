@@ -210,6 +210,7 @@ export async function runAgentLoop(
         executor: toolExecutor,
         policy,
         approvalStore,
+        sessionRuntime,
         progress,
         limits: resolved.limits,
       });
@@ -360,6 +361,7 @@ async function executeToolCalls(args: {
   executor: ToolExecutor;
   policy: PolicyEngine;
   approvalStore: NonNullable<AgentLoopOptions["approvalStore"]>;
+  sessionRuntime: SessionRuntime | undefined;
   progress: ReturnType<typeof createRuntimeProgress>;
   limits: ReturnType<typeof resolveRuntimeOptions>["limits"];
 }): Promise<{ results: GovernedToolResult[]; terminationReason?: RunTerminationReason }> {
@@ -441,6 +443,7 @@ async function executeGovernedTool(
     executor: args.executor,
     policy: effectivePolicy,
     approvalStore: args.approvalStore,
+    ...(args.options.approvalHandler !== undefined ? { approvalHandler: args.options.approvalHandler } : {}),
     eventSink: args.options.eventSink,
     audit: args.options.audit,
     principalId: args.options.principalId,
@@ -457,6 +460,13 @@ async function executeGovernedTool(
         } }
       : {}),
   });
+  if (lifecycle.approval) {
+    await args.sessionRuntime?.recordApproval(
+      lifecycle.approval,
+      lifecycle.approval.decision === "allow" ? "approved" : "denied",
+      { runId: args.context.runId, turnId: args.context.turnId },
+    );
+  }
   await args.options.emit?.({ type: "tool_execution_end", toolCall: effectiveCall, result: lifecycle.toolResult });
   const content = serializeToolOutput(lifecycle.toolResult.output);
   return {
@@ -465,7 +475,24 @@ async function executeGovernedTool(
       content: additionalContext ? `${content}\n\n[Additional context]\n${additionalContext}` : content,
       toolResult: lifecycle.toolResult,
     },
-    ...(lifecycle.execution !== undefined ? { invocation: lifecycle.execution.invocation } : {}),
+    ...(lifecycle.execution !== undefined
+      ? { invocation: lifecycle.execution.invocation }
+      : lifecycle.preparation !== undefined
+        ? {
+            invocation: {
+              invocationId: `${args.context.turnId}:tool:${effectiveCall.id}`,
+              runId: args.context.runId,
+              turnId: args.context.turnId,
+              toolCallId: effectiveCall.id,
+              toolName: effectiveCall.name,
+              state: "failed" as const,
+              input: lifecycle.preparation.summary,
+              mutationSummary: lifecycle.preparation.summary,
+              output: lifecycle.toolResult.output,
+              isError: true,
+            },
+          }
+        : {}),
     ...(lifecycle.execution?.terminationReason !== undefined
       ? { terminationReason: lifecycle.execution.terminationReason }
       : {}),

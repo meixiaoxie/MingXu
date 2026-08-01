@@ -1,7 +1,8 @@
 export type { Tool, ToolGovernance } from "../core/types.js";
 export { defineTool } from "./tool.js";
 export type { RuntimeTool, RuntimeToolDefinition } from "./tool.js";
-export { ToolExecutor } from "./tool-executor.js";
+export { isTwoPhaseTool, ToolExecutor } from "./tool-executor.js";
+export type { ToolExecutorRequest, ToolExecutorResult, ToolPreparationResult } from "./tool-executor.js";
 export { executeToolLifecycle } from "./tool-lifecycle.js";
 export type { ToolLifecycleDependencies, ToolLifecycleOutcome, ToolLifecycleRequest, ToolLifecycleResult } from "./tool-lifecycle.js";
 export { ToolRegistry } from "./tool-registry.js";

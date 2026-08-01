@@ -34,6 +34,7 @@ interface PluginMetadata {
 /** Loads local ESM plugins while rejecting malformed modules and duplicate names. */
 export class PluginLoader {
   readonly #plugins = new Map<string, Plugin>();
+  readonly #registeredTools = new Map<string, readonly string[]>();
   #sequence = 0;
 
   constructor(private readonly context: PluginContext) {}
@@ -83,6 +84,7 @@ export class PluginLoader {
       }
 
       this.#plugins.set(plugin.name, plugin);
+      this.#registeredTools.set(plugin.name, registeredToolNames);
       await this.context.eventSink?.emit(createRuntimeEvent("plugin.load.end", {
         pluginName: plugin.name,
         pluginPath: sourcePath,
@@ -107,6 +109,40 @@ export class PluginLoader {
 
   list(): readonly Plugin[] {
     return [...this.#plugins.values()];
+  }
+
+  has(identifier: string): boolean {
+    return this.#findPluginName(identifier) !== undefined;
+  }
+
+  async unload(identifier: string): Promise<boolean> {
+    const pluginName = this.#findPluginName(identifier);
+    if (!pluginName) return false;
+    const plugin = this.#plugins.get(pluginName)!;
+    let failure: unknown;
+    try {
+      await plugin.deactivate?.(this.context);
+    } catch (error) {
+      failure = error;
+    } finally {
+      for (const toolName of [...(this.#registeredTools.get(pluginName) ?? [])].reverse()) {
+        this.context.unregisterTool?.(toolName);
+      }
+      this.#registeredTools.delete(pluginName);
+      this.#plugins.delete(pluginName);
+      try {
+        await plugin.dispose?.();
+      } catch (error) {
+        failure ??= error;
+      }
+    }
+    if (failure) throw failure;
+    return true;
+  }
+
+  #findPluginName(identifier: string): string | undefined {
+    if (this.#plugins.has(identifier)) return identifier;
+    return [...this.#plugins.entries()].find(([, plugin]) => plugin.manifest?.id === identifier)?.[0];
   }
 }
 

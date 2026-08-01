@@ -20,13 +20,22 @@ export interface SessionRuntimeOptions {
   readonly title?: string;
 }
 
-function redactMessages(messages: Message[]): Message[] {
+function redactMessages(messages: Message[], invocations: readonly ToolInvocation[] = []): Message[] {
+  const invocationInputs = new Map(invocations.map((invocation) => [
+    invocation.toolCallId,
+    invocation.mutationSummary ?? invocation.input,
+  ] as const));
   return messages.map((message) => {
     if (message.role === "assistant") {
       return {
         ...message,
         content: redactText(message.content),
-        ...(message.toolCalls ? { toolCalls: message.toolCalls.map((call) => ({ ...call, input: redactValue(call.input) })) } : {}),
+        ...(message.toolCalls ? {
+          toolCalls: message.toolCalls.map((call) => ({
+            ...call,
+            input: redactValue(invocationInputs.get(call.id) ?? call.input),
+          })),
+        } : {}),
       };
     }
     if (message.role === "tool") {
@@ -136,7 +145,7 @@ export class SessionRuntime {
             ...latestTurn,
             state: turn.state,
             ...(turn.state === "completed" ? { endedAt: new Date().toISOString() } : {}),
-            messages: redactMessages(messages),
+            messages: redactMessages(messages, turn.toolInvocations),
             toolInvocations: turn.toolInvocations.map(toSessionToolInvocation),
           }
         : {
@@ -147,7 +156,7 @@ export class SessionRuntime {
             sequence: turn.sequence,
             startedAt: turn.startedAt,
             ...(turn.state === "completed" ? { endedAt: new Date().toISOString() } : {}),
-            messages: redactMessages(messages),
+            messages: redactMessages(messages, turn.toolInvocations),
             toolInvocations: turn.toolInvocations.map(toSessionToolInvocation),
           };
       const turns = latestTurn
@@ -181,7 +190,7 @@ export class SessionRuntime {
             ...latestTurn,
             state: turn.state,
             endedAt: now,
-            messages: redactMessages(messages),
+            messages: redactMessages(messages, turn.toolInvocations),
             toolInvocations: turn.toolInvocations.map(toSessionToolInvocation),
           }
         : {
@@ -192,7 +201,7 @@ export class SessionRuntime {
             sequence: turn.sequence,
             startedAt: turn.startedAt,
             endedAt: now,
-            messages: redactMessages(messages),
+            messages: redactMessages(messages, turn.toolInvocations),
             toolInvocations: turn.toolInvocations.map(toSessionToolInvocation),
           };
       const turns = latestTurn
@@ -235,9 +244,13 @@ export class SessionRuntime {
       record,
     };
 
+    const existingIndex = document.approvals.findIndex((candidate) => candidate.approvalId === record.id);
+    const approvals = existingIndex >= 0
+      ? document.approvals.map((candidate, index) => index === existingIndex ? approval : candidate)
+      : [...document.approvals, approval];
     const saved = await this.#store.saveSession({
       ...document,
-      approvals: [...document.approvals, approval],
+      approvals,
     }, document.revision);
     this.#document = saved.document;
   }
@@ -297,7 +310,8 @@ function toSessionToolInvocation(invocation: ToolInvocation): SessionToolInvocat
     state: invocation.state,
     startedAt: new Date().toISOString(),
     ...(invocation.state === "completed" || invocation.state === "failed" ? { endedAt: new Date().toISOString() } : {}),
-    input: invocation.input,
+    input: redactValue(invocation.mutationSummary ?? invocation.input),
+    ...(invocation.mutationSummary !== undefined ? { mutationSummary: invocation.mutationSummary } : {}),
     ...(invocation.output !== undefined ? { output: invocation.output } : {}),
     ...(invocation.isError !== undefined ? { isError: invocation.isError } : {}),
   };

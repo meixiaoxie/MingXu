@@ -1,9 +1,12 @@
-import { createHash } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { spawn } from "node:child_process";
-import { access, mkdir, readdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { access, chmod, lstat, mkdir, readdir, readFile, realpath, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 const CODING_TOOL_NAMES = ["read", "list", "search", "write", "edit", "command"];
+const MUTATION_PROTOCOL = "mingxu/tool-mutation-v1";
+const MAX_DIFF_LINES = 240;
+const MAX_DIFF_BYTES = 64 * 1024;
 
 const codingToolEntries = {
   read: {
@@ -101,13 +104,15 @@ export {
 export function createCodingToolsPlugin(options = {}) {
   const workspaceRoot = options.workspaceRoot ?? process.cwd();
   const resolvedWorkspaceRoot = resolve(workspaceRoot);
+  const mutationSecret = randomBytes(32);
+  const atomicReplace = typeof options.atomicReplace === "function" ? options.atomicReplace : rename;
 
   return {
     name: codingToolsManifest.name,
     manifest: codingToolsManifest,
     async setup(context) {
       const root = await resolveWorkspaceRoot(resolvedWorkspaceRoot);
-      for (const tool of createWorkspaceTools(root)) {
+      for (const tool of createWorkspaceTools(root, { mutationSecret, atomicReplace })) {
         context.registerTool(tool);
       }
     },
@@ -121,13 +126,13 @@ export const codingToolsPlugin = createCodingToolsPlugin();
 
 export default codingToolsPlugin;
 
-function createWorkspaceTools(workspaceRoot) {
+function createWorkspaceTools(workspaceRoot, mutationOptions) {
   return [
     createReadTool(workspaceRoot),
     createListTool(workspaceRoot),
     createSearchTool(workspaceRoot),
-    createWriteTool(workspaceRoot),
-    createEditTool(workspaceRoot),
+    createWriteTool(workspaceRoot, mutationOptions),
+    createEditTool(workspaceRoot, mutationOptions),
     createCommandTool(workspaceRoot),
   ];
 }
@@ -144,7 +149,7 @@ function createReadTool(workspaceRoot) {
       },
       required: ["path"],
     },
-    governance: codingToolEntries.read.governance,
+    governance: { ...codingToolEntries.read.governance, rootDirectory: workspaceRoot },
     async execute(input, context) {
       context?.signal?.throwIfAborted();
       const path = await resolveReadablePath(workspaceRoot, input.path, "read path");
@@ -171,7 +176,7 @@ function createListTool(workspaceRoot) {
         recursive: { type: "boolean" },
       },
     },
-    governance: codingToolEntries.list.governance,
+    governance: { ...codingToolEntries.list.governance, rootDirectory: workspaceRoot },
     async execute(input, context) {
       context?.signal?.throwIfAborted();
       const target = await resolveExistingDirectoryPath(workspaceRoot, input.path ?? ".", "list path");
@@ -200,7 +205,7 @@ function createSearchTool(workspaceRoot) {
       },
       required: ["pattern"],
     },
-    governance: codingToolEntries.search.governance,
+    governance: { ...codingToolEntries.search.governance, rootDirectory: workspaceRoot },
     async execute(input, context) {
       context?.signal?.throwIfAborted();
       const target = await resolveExistingDirectoryPath(workspaceRoot, input.path ?? ".", "search path");
@@ -251,7 +256,7 @@ function createSearchTool(workspaceRoot) {
   };
 }
 
-function createWriteTool(workspaceRoot) {
+function createWriteTool(workspaceRoot, mutationOptions) {
   return {
     name: "write",
     description: codingToolEntries.write.description,
@@ -264,23 +269,21 @@ function createWriteTool(workspaceRoot) {
       },
       required: ["path", "content"],
     },
-    governance: codingToolEntries.write.governance,
-    async execute(input, context) {
+    governance: { ...codingToolEntries.write.governance, rootDirectory: workspaceRoot },
+    async prepare(input, context) {
       context?.signal?.throwIfAborted();
-      const target = await resolveWritablePath(workspaceRoot, input.path, "write path");
-      const before = await readExistingText(target);
-      if (before !== undefined && input.overwrite !== true) {
-        throw new Error(`File already exists: ${toWorkspaceRelative(workspaceRoot, target)}`);
-      }
-      await mkdir(dirname(target), { recursive: true });
-      const after = String(input.content ?? "");
-      await writeFile(target, after, "utf8");
-      return buildDiffResult(workspaceRoot, target, "write", before, after);
+      return prepareFileMutation(workspaceRoot, mutationOptions.mutationSecret, "write", input);
+    },
+    async commit(preparation, context) {
+      return commitFileMutation(workspaceRoot, mutationOptions, preparation, context?.signal);
+    },
+    async execute() {
+      throw new Error("write requires the prepare/commit lifecycle");
     },
   };
 }
 
-function createEditTool(workspaceRoot) {
+function createEditTool(workspaceRoot, mutationOptions) {
   return {
     name: "edit",
     description: codingToolEntries.edit.description,
@@ -292,18 +295,16 @@ function createEditTool(workspaceRoot) {
       },
       required: ["path", "content"],
     },
-    governance: codingToolEntries.edit.governance,
-    async execute(input, context) {
+    governance: { ...codingToolEntries.edit.governance, rootDirectory: workspaceRoot },
+    async prepare(input, context) {
       context?.signal?.throwIfAborted();
-      const target = await resolveWritablePath(workspaceRoot, input.path, "edit path");
-      const before = await readExistingText(target);
-      if (before === undefined) {
-        throw new Error(`File does not exist: ${toWorkspaceRelative(workspaceRoot, target)}`);
-      }
-      await mkdir(dirname(target), { recursive: true });
-      const after = String(input.content ?? "");
-      await writeFile(target, after, "utf8");
-      return buildDiffResult(workspaceRoot, target, "edit", before, after);
+      return prepareFileMutation(workspaceRoot, mutationOptions.mutationSecret, "edit", input);
+    },
+    async commit(preparation, context) {
+      return commitFileMutation(workspaceRoot, mutationOptions, preparation, context?.signal);
+    },
+    async execute() {
+      throw new Error("edit requires the prepare/commit lifecycle");
     },
   };
 }
@@ -519,12 +520,206 @@ async function readExistingText(path) {
   }
 }
 
-function buildDiffResult(workspaceRoot, target, operation, before, after) {
+async function prepareFileMutation(workspaceRoot, secret, operation, input) {
+  const currentRoot = await realpath(workspaceRoot).catch(() => {
+    throw stalePreparation("workspace is unavailable");
+  });
+  if (normalizeComparablePath(currentRoot) !== normalizeComparablePath(workspaceRoot)) {
+    throw stalePreparation("workspace realpath changed");
+  }
+  const requestedPath = sanitizeLocalPath(input.path, `${operation} path`);
+  const target = await resolveWritablePath(currentRoot, requestedPath, `${operation} path`);
+  const targetLstat = await lstat(target).catch((error) => isMissingFileError(error) ? undefined : Promise.reject(error));
+  if (targetLstat?.isSymbolicLink()) {
+    throw new Error(`${operation} path must not be a symbolic link`);
+  }
+  const before = await readExistingText(target);
+  if (operation === "write" && before !== undefined && input.overwrite !== true) {
+    throw new Error(`File already exists: ${toWorkspaceRelative(currentRoot, target)}`);
+  }
+  if (operation === "edit" && before === undefined) {
+    throw new Error(`File does not exist: ${toWorkspaceRelative(currentRoot, target)}`);
+  }
+  const after = String(input.content ?? "");
+  const targetStats = before === undefined ? undefined : await stat(target);
+  const targetRealPath = before === undefined ? undefined : await realpath(target);
+  const parentPath = dirname(target);
+  const ancestor = await resolveNearestExistingAncestor(parentPath);
+  const ancestorRealPath = await realpath(ancestor);
+  assertPathInsideRoot(currentRoot, ancestorRealPath, `${operation} path`);
+
+  const baselineHash = before === undefined ? "missing" : hashText(before);
+  const targetHash = hashText(after);
+  const bindingWithoutFingerprint = {
+    protocolVersion: MUTATION_PROTOCOL,
+    operation,
+    workspaceRoot: normalizeComparablePath(currentRoot),
+    requestedPath,
+    normalizedPath: normalizeComparablePath(target),
+    baselineHash,
+    baselineExists: before !== undefined,
+    baselineMode: targetStats ? targetStats.mode & 0o777 : null,
+    targetHash,
+  };
+  const changeFingerprint = signMutation(secret, bindingWithoutFingerprint);
+  const diff = buildDiffPreview(currentRoot, target, operation, before, after, baselineHash, targetHash);
+  const binding = Object.freeze({ ...bindingWithoutFingerprint, changeFingerprint });
+  const summary = Object.freeze({
+    operation,
+    path: toWorkspaceRelative(currentRoot, target),
+    diffRef: diff.diffRef,
+    beforeBytes: Buffer.byteLength(before ?? "", "utf8"),
+    afterBytes: Buffer.byteLength(after, "utf8"),
+    additions: diff.additions,
+    deletions: diff.deletions,
+  });
+  return Object.freeze({
+    protocol: MUTATION_PROTOCOL,
+    binding,
+    summary,
+    presentation: Object.freeze({
+      id: `mutation:${changeFingerprint}`,
+      kind: "diff",
+      revision: 1,
+      source: "mingxu-coding-tools",
+      sensitivity: "internal",
+      state: "complete",
+      payload: Object.freeze({
+        operation,
+        path: summary.path,
+        diffRef: diff.diffRef,
+        changes: Object.freeze(diff.changes),
+        truncated: diff.truncated,
+      }),
+    }),
+    opaque: Object.freeze({
+      target,
+      parentPath,
+      ancestorRealPath: normalizeComparablePath(ancestorRealPath),
+      ...(targetRealPath !== undefined ? { targetRealPath: normalizeComparablePath(targetRealPath) } : {}),
+      after,
+    }),
+  });
+}
+
+async function commitFileMutation(workspaceRoot, options, preparation, signal) {
+  signal?.throwIfAborted();
+  const validated = await validatePreparedMutation(workspaceRoot, options.mutationSecret, preparation, false);
+  const missingDirectories = await collectMissingDirectories(validated.parentPath, workspaceRoot);
+  const createdDirectories = [];
+  let committed = false;
+  const tempPath = join(validated.parentPath, `.${basename(validated.target)}.mingxu-${process.pid}-${randomUUID()}.tmp`);
+  try {
+    for (const directory of missingDirectories) {
+      try {
+        await mkdir(directory);
+        createdDirectories.push(directory);
+      } catch (error) {
+        if (!isAlreadyExistsError(error)) throw error;
+      }
+    }
+    await writeFile(tempPath, validated.after, {
+      encoding: "utf8",
+      flag: "wx",
+      mode: preparation.binding.baselineMode ?? 0o666,
+      ...(signal ? { signal } : {}),
+    });
+    if (preparation.binding.baselineMode !== null) {
+      await chmod(tempPath, preparation.binding.baselineMode);
+    }
+    signal?.throwIfAborted();
+    await validatePreparedMutation(workspaceRoot, options.mutationSecret, preparation, true);
+    await options.atomicReplace(tempPath, validated.target);
+    committed = true;
+    return {
+      kind: "diff",
+      operation: preparation.summary.operation,
+      path: preparation.summary.path,
+      diffRef: preparation.summary.diffRef,
+      changeFingerprint: preparation.binding.changeFingerprint,
+      summary: preparation.summary,
+      committed: true,
+    };
+  } finally {
+    if (!committed) {
+      await rm(tempPath, { force: true }).catch(() => undefined);
+      for (const directory of [...createdDirectories].reverse()) {
+        await rmdir(directory).catch(() => undefined);
+      }
+    }
+  }
+}
+
+async function validatePreparedMutation(workspaceRoot, secret, preparation, allowCreatedParent) {
+  if (!preparation || preparation.protocol !== MUTATION_PROTOCOL || !preparation.binding || !preparation.summary) {
+    throw stalePreparation("invalid mutation preparation");
+  }
+  const binding = preparation.binding;
+  const opaque = preparation.opaque;
+  if (!opaque || typeof opaque !== "object" || typeof opaque.target !== "string"
+    || typeof opaque.parentPath !== "string" || typeof opaque.ancestorRealPath !== "string" || typeof opaque.after !== "string") {
+    throw stalePreparation("invalid opaque mutation state");
+  }
+  const { changeFingerprint, ...unsignedBinding } = binding;
+  const expectedFingerprint = signMutation(secret, unsignedBinding);
+  if (!safeEqual(changeFingerprint, expectedFingerprint)) {
+    throw stalePreparation("change fingerprint is invalid");
+  }
+  const currentRoot = await realpath(workspaceRoot).catch(() => {
+    throw stalePreparation("workspace moved or is unavailable");
+  });
+  if (normalizeComparablePath(currentRoot) !== binding.workspaceRoot) {
+    throw stalePreparation("workspace realpath changed");
+  }
+  const target = resolveWorkspacePath(currentRoot, binding.requestedPath, `${binding.operation} path`);
+  if (normalizeComparablePath(target) !== binding.normalizedPath || normalizeComparablePath(target) !== normalizeComparablePath(opaque.target)) {
+    throw stalePreparation("normalized target changed");
+  }
+  const targetLstat = await lstat(target).catch((error) => isMissingFileError(error) ? undefined : Promise.reject(error));
+  if (targetLstat?.isSymbolicLink()) {
+    throw stalePreparation("target was replaced by a symbolic link");
+  }
+  const before = await readExistingText(target);
+  const baselineExists = before !== undefined;
+  const baselineHash = baselineExists ? hashText(before) : "missing";
+  if (baselineExists !== binding.baselineExists || baselineHash !== binding.baselineHash) {
+    throw stalePreparation("file content changed after preview");
+  }
+  if (baselineExists) {
+    const currentStats = await stat(target);
+    if ((currentStats.mode & 0o777) !== binding.baselineMode) {
+      throw stalePreparation("file permissions changed after preview");
+    }
+    const targetRealPath = normalizeComparablePath(await realpath(target));
+    if (targetRealPath !== opaque.targetRealPath || targetRealPath !== binding.normalizedPath) {
+      throw stalePreparation("target realpath changed after preview");
+    }
+  }
+  if (hashText(opaque.after) !== binding.targetHash) {
+    throw stalePreparation("target content hash changed");
+  }
+  const ancestor = await resolveNearestExistingAncestor(opaque.parentPath);
+  const ancestorRealPath = normalizeComparablePath(await realpath(ancestor));
+  assertPathInsideRoot(currentRoot, ancestorRealPath, `${binding.operation} path`);
+  if (!allowCreatedParent && ancestorRealPath !== opaque.ancestorRealPath) {
+    throw stalePreparation("parent realpath changed after preview");
+  }
+  if (allowCreatedParent) {
+    const parentRealPath = normalizeComparablePath(await realpath(opaque.parentPath));
+    if (parentRealPath !== normalizeComparablePath(opaque.parentPath)) {
+      throw stalePreparation("parent directory became a symbolic link");
+    }
+    assertPathInsideRoot(currentRoot, parentRealPath, `${binding.operation} path`);
+  }
+  return { target, parentPath: opaque.parentPath, after: opaque.after };
+}
+
+function buildDiffPreview(workspaceRoot, target, operation, before, after, baselineHash, targetHash) {
   const beforeText = before ?? "";
   const afterText = String(after ?? "");
   const beforeLines = splitLines(beforeText);
   const afterLines = splitLines(afterText);
-  const diffLines = [
+  const allLines = [
     `diff -- ${toWorkspaceRelative(workspaceRoot, target)}`,
     `--- before`,
     `+++ after`,
@@ -535,25 +730,81 @@ function buildDiffResult(workspaceRoot, target, operation, before, after) {
     const right = afterLines[index];
     if (left === right) {
       if (left !== undefined) {
-        diffLines.push(`  ${left}`);
+        allLines.push(`  ${left}`);
       }
       continue;
     }
     if (left !== undefined) {
-      diffLines.push(`- ${left}`);
+      allLines.push(`- ${left}`);
     }
     if (right !== undefined) {
-      diffLines.push(`+ ${right}`);
+      allLines.push(`+ ${right}`);
     }
   }
+  const changes = [];
+  let bytes = 0;
+  for (const line of allLines) {
+    if (changes.length >= MAX_DIFF_LINES) break;
+    const remaining = MAX_DIFF_BYTES - bytes;
+    if (remaining <= 0) break;
+    const encoded = Buffer.from(line, "utf8");
+    const next = encoded.byteLength <= remaining ? line : encoded.subarray(0, remaining).toString("utf8");
+    changes.push(next);
+    bytes += Buffer.byteLength(next, "utf8") + 1;
+  }
   return {
-    kind: "diff",
-    operation,
-    path: toWorkspaceRelative(workspaceRoot, target),
-    before: beforeText,
-    after: afterText,
-    changes: diffLines,
+    diffRef: hashText(JSON.stringify({ operation, path: toWorkspaceRelative(workspaceRoot, target), baselineHash, targetHash })),
+    additions: allLines.filter((line) => line.startsWith("+ ")).length,
+    deletions: allLines.filter((line) => line.startsWith("- ")).length,
+    changes,
+    truncated: changes.length < allLines.length,
   };
+}
+
+function signMutation(secret, binding) {
+  return createHmac("sha256", secret).update(JSON.stringify(binding)).digest("hex");
+}
+
+function hashText(value) {
+  return createHash("sha256").update(String(value), "utf8").digest("hex");
+}
+
+function safeEqual(left, right) {
+  if (typeof left !== "string" || typeof right !== "string") return false;
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function normalizeComparablePath(value) {
+  const normalized = resolve(value).replace(/\\/gu, "/");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+async function collectMissingDirectories(parentPath, workspaceRoot) {
+  const missing = [];
+  let current = parentPath;
+  while (normalizeComparablePath(current) !== normalizeComparablePath(workspaceRoot)) {
+    try {
+      await access(current);
+      break;
+    } catch (error) {
+      if (!isMissingFileError(error)) throw error;
+      missing.push(current);
+      const parent = dirname(current);
+      if (parent === current) throw new Error("Unable to resolve writable parent directory");
+      current = parent;
+    }
+  }
+  return missing.reverse();
+}
+
+function stalePreparation(reason) {
+  return new Error(`Prepared change is stale (${reason}); re-run prepare before writing`);
+}
+
+function isAlreadyExistsError(error) {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === "EEXIST");
 }
 
 function splitLines(text) {

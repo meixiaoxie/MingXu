@@ -72,6 +72,44 @@ export interface PluginToolDefinition {
   readonly description: string;
   readonly inputSchema: unknown;
   readonly governance?: ToolGovernance;
+  execute?(input: unknown, context?: PluginToolExecutionContext): unknown | Promise<unknown>;
+  prepare?(input: unknown, context?: PluginToolExecutionContext): PreparedToolMutation | Promise<PreparedToolMutation>;
+  commit?(preparation: PreparedToolMutation, context?: PluginToolExecutionContext): unknown | Promise<unknown>;
+}
+
+export interface PluginToolExecutionContext {
+  readonly signal?: AbortSignal;
+}
+
+export interface ToolMutationBinding {
+  readonly protocolVersion: "mingxu/tool-mutation-v1";
+  readonly operation: string;
+  readonly workspaceRoot: string;
+  readonly requestedPath: string;
+  readonly normalizedPath: string;
+  readonly baselineHash: string;
+  readonly baselineExists: boolean;
+  readonly baselineMode: number | null;
+  readonly targetHash: string;
+  readonly changeFingerprint: string;
+}
+
+export interface ToolMutationSummary {
+  readonly operation: string;
+  readonly path: string;
+  readonly diffRef: string;
+  readonly beforeBytes: number;
+  readonly afterBytes: number;
+  readonly additions: number;
+  readonly deletions: number;
+}
+
+export interface PreparedToolMutation {
+  readonly protocol: "mingxu/tool-mutation-v1";
+  readonly binding: ToolMutationBinding;
+  readonly summary: ToolMutationSummary;
+  readonly presentation: PresentationBlock & { readonly kind: "diff" };
+  readonly opaque: unknown;
 }
 
 export interface PluginEvent {

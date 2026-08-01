@@ -37,6 +37,7 @@ export interface CodingToolsManifestV1 extends PluginManifestV1 {
 
 export interface CodingToolsPluginOptions {
   readonly workspaceRoot?: string;
+  readonly atomicReplace?: (temporaryPath: string, targetPath: string) => Promise<void>;
 }
 
 export interface CodingToolsPlugin extends PluginModuleV1 {

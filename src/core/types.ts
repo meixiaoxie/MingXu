@@ -12,7 +12,11 @@ import type { TransformContext } from "./context.js";
 import type { StreamFn } from "./stream-types.js";
 import type { AgentEventSink } from "../events/types.js";
 import type { ApprovalHandler } from "../approval/types.js";
-import type { ToolGovernance as PluginToolGovernance } from "@mingxu/plugin-sdk";
+import type {
+  PreparedToolMutation,
+  ToolGovernance as PluginToolGovernance,
+  ToolMutationSummary,
+} from "@mingxu/plugin-sdk";
 // 从 model-protocol 导入 ModelUsage，避免重复定义
 import type { ModelUsage } from "../models/model-protocol.js";
 
@@ -142,6 +146,7 @@ export interface ToolInvocation {
   toolName: string;
   state: "pending" | "running" | "completed" | "failed";
   input: unknown;
+  mutationSummary?: ToolMutationSummary;
   output?: unknown;
   isError?: boolean;
 }
@@ -210,6 +215,8 @@ export interface Tool {
   policyRootDirectory?: string;
   governance?: ToolGovernance;
   execute(input: unknown, context?: RunContext): Promise<unknown>;
+  prepare?(input: unknown, context?: RunContext): Promise<PreparedToolMutation>;
+  commit?(preparation: PreparedToolMutation, context?: RunContext): Promise<unknown>;
 }
 
 export interface ToolDefinition {

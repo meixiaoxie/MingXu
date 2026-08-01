@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 
+import type { PreparedToolMutation } from "@mingxu/plugin-sdk";
 import { createRuntimeEvent } from "../events/runtime-events.js";
 import type { ApprovalHandler, ApprovalPrompt, ApprovalRecord, ApprovalStore, ApprovalResponse } from "../approval/types.js";
 import { isApprovalUsable } from "../approval/approval-matcher.js";
@@ -13,12 +14,13 @@ import { normalizeFileAccess } from "../policy/normalizers/file-access-normalize
 import { normalizeGenericToolCall } from "../policy/normalizers/tool-call-normalizer.js";
 import { normalizeNetworkAccess } from "../policy/normalizers/network-access-normalizer.js";
 
-import type { ToolExecutor, ToolExecutorResult } from "./tool-executor.js";
+import { isTwoPhaseTool, type ToolExecutor, type ToolExecutorResult } from "./tool-executor.js";
 import type { ToolExecutionRequest } from "./tool-registry.js";
 import { ToolRegistry } from "./tool-registry.js";
 
 export type ToolLifecycleOutcome =
   | "unknown_tool"
+  | "preparation_failed"
   | "blocked"
   | "approval_missing"
   | "approval_denied"
@@ -46,6 +48,7 @@ export interface ToolLifecycleResult {
   readonly policyDecision?: PolicyDecision;
   readonly approval?: ApprovalRecord;
   readonly execution?: ToolExecutorResult;
+  readonly preparation?: PreparedToolMutation;
 }
 
 export interface ToolLifecycleRequest extends ToolExecutionRequest {
@@ -69,7 +72,32 @@ export async function executeToolLifecycle(
     throw new Error(`High-risk tool requires a healthy audit sink: ${request.name}`);
   }
 
-  const policyRequest = await buildPolicyRequest(tool, request, deps);
+  let preparation: PreparedToolMutation | undefined;
+  if (isTwoPhaseTool(tool)) {
+    await emitMutationEvent(deps, request, "tool.prepare.start", { phase: "prepare" });
+    const prepared = await deps.executor.prepare({
+      ...request,
+      invocationInput: mutationRequestSummary(request),
+      ...(request.context.timeoutMs !== undefined ? { timeoutMs: request.context.timeoutMs } : {}),
+    });
+    if (!prepared.ok) {
+      await emitMutationEvent(deps, request, "tool.prepare.error", {
+        error: prepared.execution.toolResult.output,
+      });
+      return {
+        outcome: "preparation_failed",
+        execution: prepared.execution,
+        toolResult: prepared.execution.toolResult,
+      };
+    }
+    preparation = prepared.preparation;
+    await emitMutationEvent(deps, request, "tool.prepare.end", mutationAuditPayload(preparation));
+  }
+
+  const rawPolicyRequest = await buildPolicyRequest(tool, request, deps);
+  const policyRequest = preparation
+    ? { ...rawPolicyRequest, normalizedInput: preparation.binding }
+    : rawPolicyRequest;
   const rawDecision = await deps.policy.evaluate(policyRequest);
   const decision = applyNonInteractiveAskFallback(policyRequest, rawDecision);
 
@@ -93,6 +121,7 @@ export async function executeToolLifecycle(
       outcome: "blocked",
       policyRequest,
       policyDecision: decision,
+      ...(preparation !== undefined ? { preparation } : {}),
       toolResult: createDeniedToolResult(request.toolCallId, request.name, `Tool denied by policy: ${decision.reason}`),
     };
   }
@@ -113,6 +142,7 @@ export async function executeToolLifecycle(
           policyRequest,
           policyDecision: decision,
           approval: existingApproval,
+          ...(preparation !== undefined ? { preparation } : {}),
           toolResult: createDeniedToolResult(request.toolCallId, request.name, `Approval denied for tool: ${request.name}`),
         };
       }
@@ -122,6 +152,7 @@ export async function executeToolLifecycle(
         policyRequest,
         decision,
         approval: existingApproval,
+        ...(preparation !== undefined ? { preparation } : {}),
       });
     }
 
@@ -132,15 +163,27 @@ export async function executeToolLifecycle(
         principalId: policyRequest.principal.id,
         requestFingerprint,
         actionKind: policyRequest.action.kind,
-        resourceScope: policyRequest.resource.kind,
+        resourceScope: policyRequest.resource.kind === "file"
+          ? policyRequest.resource.caseNormalizedPath
+          : policyRequest.resource.kind,
+        ...(policyRequest.resource.kind === "file"
+          ? { normalizedResource: policyRequest.resource.caseNormalizedPath }
+          : {}),
         reason: decision.reason,
-        input: resolveInput(request),
+        input: preparation ? approvalPreview(preparation) : resolveInput(request),
         policyEffect: decision.effect,
         ...(decision.obligations !== undefined ? { policyObligations: decision.obligations } : {}),
       };
       const response = normalizeApprovalResponse(await deps.approvalHandler(prompt));
       if (response) {
         if (response.decision === "deny") {
+          const approvalRecord = createApprovalRecord(requestFingerprint, policyRequest, request.name, response.decision, preparation);
+          await deps.eventSink?.emit(createRuntimeEvent("approval.matched", {
+            toolCallId: request.toolCallId,
+            toolName: request.name,
+            approvalId: approvalRecord.id,
+            decision: approvalRecord.decision,
+          }, createEventContext(request.context, "core")));
           await deps.eventSink?.emit(createRuntimeEvent("tool.execution_blocked", {
             toolCallId: request.toolCallId,
             toolName: request.name,
@@ -150,11 +193,13 @@ export async function executeToolLifecycle(
             outcome: "approval_denied",
             policyRequest,
             policyDecision: decision,
+            approval: approvalRecord,
+            ...(preparation !== undefined ? { preparation } : {}),
             toolResult: createDeniedToolResult(request.toolCallId, request.name, `Approval denied for tool: ${request.name}`),
           };
         }
 
-        const approvalRecord = createApprovalRecord(requestFingerprint, policyRequest.principal.id, request.name, response.decision);
+        const approvalRecord = createApprovalRecord(requestFingerprint, policyRequest, request.name, response.decision, preparation);
         if (response.scope === "session") {
           await deps.approvalStore.add(approvalRecord);
         }
@@ -170,6 +215,7 @@ export async function executeToolLifecycle(
           policyRequest,
           decision,
           approval: approvalRecord,
+          ...(preparation !== undefined ? { preparation } : {}),
         });
       }
     }
@@ -183,6 +229,7 @@ export async function executeToolLifecycle(
       outcome: "approval_missing",
       policyRequest,
       policyDecision: decision,
+      ...(preparation !== undefined ? { preparation } : {}),
       toolResult: createDeniedToolResult(request.toolCallId, request.name, `Approval required for tool: ${request.name}`),
     };
   }
@@ -192,6 +239,7 @@ export async function executeToolLifecycle(
     deps,
     policyRequest,
     decision,
+    ...(preparation !== undefined ? { preparation } : {}),
   });
 }
 
@@ -202,6 +250,7 @@ async function executeApprovedTool(
     policyRequest: PolicyRequest;
     decision: PolicyDecision;
     approval?: ApprovalRecord;
+    preparation?: PreparedToolMutation;
   },
 ): Promise<ToolLifecycleResult> {
   await args.deps.eventSink?.emit(createRuntimeEvent("tool.execution_allowed", {
@@ -212,16 +261,28 @@ async function executeApprovedTool(
   await args.deps.eventSink?.emit(createRuntimeEvent("tool.call.start", {
     toolCallId: args.request.toolCallId,
     toolName: args.request.name,
-    input: redactValue(resolveInput(args.request)),
+    input: redactValue(args.preparation ? mutationAuditPayload(args.preparation) : resolveInput(args.request)),
   }, createEventContext(args.request.context, "tool")));
 
-  let execution = await args.deps.executor.execute({
-    name: args.request.name,
-    input: resolveInput(args.request),
-    toolCallId: args.request.toolCallId,
-    context: args.request.context,
-    ...(args.request.context.timeoutMs !== undefined ? { timeoutMs: args.request.context.timeoutMs } : {}),
-  });
+  if (args.preparation) {
+    await emitMutationEvent(args.deps, args.request, "tool.commit.start", mutationAuditPayload(args.preparation));
+  }
+  let execution = args.preparation
+    ? await args.deps.executor.commit({
+        name: args.request.name,
+        input: resolveInput(args.request),
+        invocationInput: args.preparation.summary,
+        toolCallId: args.request.toolCallId,
+        context: args.request.context,
+        ...(args.request.context.timeoutMs !== undefined ? { timeoutMs: args.request.context.timeoutMs } : {}),
+      }, args.preparation)
+    : await args.deps.executor.execute({
+        name: args.request.name,
+        input: resolveInput(args.request),
+        toolCallId: args.request.toolCallId,
+        context: args.request.context,
+        ...(args.request.context.timeoutMs !== undefined ? { timeoutMs: args.request.context.timeoutMs } : {}),
+      });
   if (args.deps.transformExecution) {
     execution = await args.deps.transformExecution(execution);
   }
@@ -229,15 +290,31 @@ async function executeApprovedTool(
   await args.deps.eventSink?.emit(createRuntimeEvent(execution.toolResult.isError ? "tool.call.error" : "tool.call.end", {
     toolCallId: args.request.toolCallId,
     toolName: args.request.name,
-    output: redactValue(execution.toolResult.output),
+    output: redactValue(args.preparation
+      ? execution.toolResult.isError
+        ? { error: execution.toolResult.output, ...mutationAuditPayload(args.preparation) }
+        : { result: "committed", ...mutationAuditPayload(args.preparation) }
+      : execution.toolResult.output),
     isError: execution.toolResult.isError ?? false,
   }, createEventContext(args.request.context, "tool")));
+  if (args.preparation) {
+    await emitMutationEvent(
+      args.deps,
+      args.request,
+      execution.toolResult.isError ? "tool.commit.error" : "tool.commit.end",
+      {
+        ...mutationAuditPayload(args.preparation),
+        ...(execution.toolResult.isError ? { error: execution.toolResult.output } : { result: "committed" }),
+      },
+    );
+  }
 
   return {
     outcome: "executed",
     policyRequest: args.policyRequest,
     policyDecision: args.decision,
     ...(args.approval !== undefined ? { approval: args.approval } : {}),
+    ...(args.preparation !== undefined ? { preparation: args.preparation } : {}),
     execution,
     toolResult: execution.toolResult,
   };
@@ -383,21 +460,79 @@ function buildRequestFingerprint(request: PolicyRequest): string {
 
 function createApprovalRecord(
   requestFingerprint: string,
-  principalId: string,
+  policyRequest: PolicyRequest,
   toolName: string,
   decision: "allow" | "deny",
+  preparation?: PreparedToolMutation,
 ): ApprovalRecord {
   const now = new Date().toISOString();
   return {
     id: randomUUID(),
     requestFingerprint,
-    principalId,
-    actionKind: "tool.call",
-    resourceScope: toolName,
-    operator: principalId,
+    principalId: policyRequest.principal.id,
+    actionKind: policyRequest.action.kind,
+    resourceScope: policyRequest.resource.kind === "file"
+      ? policyRequest.resource.caseNormalizedPath
+      : toolName,
+    operator: policyRequest.principal.id,
     decision,
     createdAt: now,
+    ...(preparation !== undefined ? {
+      mutation: {
+        changeFingerprint: preparation.binding.changeFingerprint,
+        baselineHash: preparation.binding.baselineHash,
+        targetHash: preparation.binding.targetHash,
+        normalizedPath: preparation.binding.normalizedPath,
+        diffRef: preparation.summary.diffRef,
+      },
+    } : {}),
   };
+}
+
+function approvalPreview(preparation: PreparedToolMutation): unknown {
+  return {
+    binding: preparation.binding,
+    summary: preparation.summary,
+    presentation: preparation.presentation,
+  };
+}
+
+function mutationAuditPayload(preparation: PreparedToolMutation): Record<string, unknown> {
+  return {
+    operation: preparation.binding.operation,
+    path: preparation.binding.normalizedPath,
+    baselineHash: preparation.binding.baselineHash,
+    targetHash: preparation.binding.targetHash,
+    changeFingerprint: preparation.binding.changeFingerprint,
+    diffRef: preparation.summary.diffRef,
+    beforeBytes: preparation.summary.beforeBytes,
+    afterBytes: preparation.summary.afterBytes,
+  };
+}
+
+function mutationRequestSummary(request: ToolLifecycleRequest): Record<string, unknown> {
+  const input = resolveInput(request);
+  const path = input && typeof input === "object" && "path" in input && typeof input.path === "string"
+    ? input.path.slice(0, 1024)
+    : undefined;
+  return {
+    operation: request.name,
+    ...(path !== undefined ? { path } : {}),
+    status: "prepare_failed",
+  };
+}
+
+async function emitMutationEvent(
+  deps: Pick<ToolLifecycleDependencies, "eventSink">,
+  request: ToolLifecycleRequest,
+  eventType: "tool.prepare.start" | "tool.prepare.end" | "tool.prepare.error" | "tool.commit.start" | "tool.commit.end" | "tool.commit.error",
+  payload: Record<string, unknown>,
+): Promise<void> {
+  await deps.eventSink?.emit(createRuntimeEvent(eventType, {
+    toolCallId: request.toolCallId,
+    toolName: request.name,
+    ...redactValue(payload) as Record<string, unknown>,
+  }, createEventContext(request.context, "tool")));
 }
 
 function normalizeApprovalResponse(response: ApprovalResponse | undefined): ApprovalResponse | undefined {

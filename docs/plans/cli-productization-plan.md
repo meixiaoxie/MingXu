@@ -27,7 +27,7 @@
 | R3 IME、选择区与输入边界 | P0 | 完成真实中文输入法和选择编辑体验 | R1 的 viewport 协议 | 已完成（2026-07-31） |
 | R4 产品组件与复杂面板 | P1 | 完成 Markdown、Diff、CommandBlock 和面板交互 | R1、R3 | 已完成（2026-07-31） |
 | R5 CLI 职责拆分与 Session replay | P0 | 完成运行适配、命令、屏幕和回放边界 | 稳定事件投影 | 已完成（2026-07-31） |
-| R6 coding-tools 两阶段写入 | P0 | 写入前预览，审批后原子提交 | R4、R5 | 待完成 |
+| R6 coding-tools 两阶段写入 | P0 | 写入前预览，审批后原子提交 | R4、R5 | 已完成（2026-08-01） |
 | R7 发布级压力与跨平台验收 | P0 | 用真实产物和三平台结果关闭发布门槛 | R1-R6 | 待完成 |
 
 ## 4. R1：终端渲染与真实 scrollback
@@ -266,6 +266,17 @@ write/edit 在任何文件副作用发生前生成可审阅 Diff，经 Policy �
 - 任何基线或路径变化都会使旧审批失效。
 - 停用或卸载后工具立即不可用，已存在 Session 仍可继续。
 
+### 完成状态
+
+R6 已于 2026-08-01 完成，发布级压力与跨平台验收仍按 R7 独立推进：
+
+- plugin SDK 新增向后兼容的 prepare/commit 协议；coding-tools write/edit 在 Policy 和 Approval 前生成有界 Diff，审批指纹绑定 principal、Session、工具、规范化目标、基线哈希、目标哈希和插件私有 HMAC 变更指纹，既有单阶段工具保持原执行路径。
+- commit 会重新验证 workspace、目标、父目录、符号链接、内容、权限和指纹，使用同目录临时文件与原子替换，精确保留原文件 mode，并在失败或 Abort 后清理临时文件和本次创建的空目录；漂移后的旧审批不能复用。
+- Audit 只记录 prepare、Policy、Approval、commit、拒绝和失败的有界元数据；Session 只保存 mutation summary、Diff 引用、审批决定和最终结果，成功、拒绝及 prepare 失败路径均不会把 write/edit 正文写入 JSONL。
+- PluginLoader 支持卸载并撤销工具注册；扩展停用或卸载后活动 ToolRegistry 立即移除贡献，既有 Session 文件保持可读取。
+- R6 聚焦测试共 8 个文件、38 个用例通过，覆盖未审批、拒绝、超时等价响应、Abort、内容/权限/指纹/符号链接/workspace 漂移、allow once/session、principal 与 Session 隔离、原子失败清理与重试、精确 mode 保留、Audit/Session 正文隔离及扩展卸载一致性；`pnpm typecheck`、`pnpm test`（66 个文件、319 个用例）、`pnpm build` 和 coding-tools 包构建通过。
+- 本状态不包含 R7、真实 tarball 三平台安装、发布级压力验收或第 14 节最终完成定义，也不代表成品 CLI 已完成。
+
 ## 10. R7：发布级压力与跨平台验收
 
 ### 目标
@@ -370,7 +381,7 @@ pnpm audit --prod
 
 在第 14 节全部勾选之前，只使用以下表述：
 
-> MingXu 已具备可运行的 Agent 核心、CLI 主链、真实终端 scrollback、完整终端生命周期恢复、IME 与选择编辑边界、TUI 产品组件、真实 coding-tools 插件和安装烟测，正在完成运行时职责拆分、Session replay、两阶段写入和跨平台发布验收。
+> MingXu 已具备可运行的 Agent 核心、CLI 主链、真实终端 scrollback、完整终端生命周期恢复、IME 与选择编辑边界、TUI 产品组件、运行时职责拆分、Session replay、coding-tools 两阶段写入和安装烟测，正在完成发布级压力与跨平台验收。
 
 全部通过以后，才可以使用：
 

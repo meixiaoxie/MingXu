@@ -6,7 +6,11 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { ExtensionManager } from "../src/extensions/extension-manager.js";
 import { PluginLoader } from "../src/plugins/plugin-loader.js";
+import { JsonlSessionStore } from "../src/session/jsonl-session-store.js";
+import { ToolRegistry } from "../src/tools/tool-registry.js";
+import type { Tool } from "../src/core/types.js";
 import { createCodingToolsPlugin, codingToolsManifest } from "../packages/coding-tools/runtime.js";
+import type { PreparedToolMutation } from "@mingxu/plugin-sdk";
 
 const roots: string[] = [];
 const codingToolsPackageRoot = join(process.cwd(), "packages", "coding-tools");
@@ -22,12 +26,18 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-async function setupCodingToolsPlugin(workspaceRoot: string): Promise<Map<string, { execute(input: unknown, context?: { signal?: AbortSignal }): Promise<unknown> }>> {
+interface CodingRuntimeTool {
+  execute(input: unknown, context?: { signal?: AbortSignal }): Promise<unknown>;
+  prepare?(input: unknown, context?: { signal?: AbortSignal }): Promise<PreparedToolMutation>;
+  commit?(preparation: PreparedToolMutation, context?: { signal?: AbortSignal }): Promise<unknown>;
+}
+
+async function setupCodingToolsPlugin(workspaceRoot: string): Promise<Map<string, CodingRuntimeTool>> {
   const plugin = createCodingToolsPlugin({ workspaceRoot });
-  const tools = new Map<string, { execute(input: unknown, context?: { signal?: AbortSignal }): Promise<unknown> }>();
+  const tools = new Map<string, CodingRuntimeTool>();
   await plugin.setup({
     registerTool(tool) {
-      tools.set(tool.name, tool as unknown as { execute(input: unknown, context?: { signal?: AbortSignal }): Promise<unknown> });
+      tools.set(tool.name, tool as unknown as CodingRuntimeTool);
     },
     unregisterTool() {
       return true;
@@ -113,35 +123,37 @@ describe("coding-tools plugin runtime", () => {
     await expect(tools.get("read")!.execute({ path: "//server/share.txt" })).rejects.toThrow("network path");
   });
 
-  it("writes and edits files as diff results", async () => {
+  it("previews writes and edits before committing diff results", async () => {
     const workspaceRoot = await createSampleWorkspace();
     const tools = await setupCodingToolsPlugin(workspaceRoot);
 
-    const writeResult = await tools.get("write")!.execute({
+    const writeTool = tools.get("write")!;
+    const writePreparation = await writeTool.prepare!({
       path: "new-file.txt",
       content: "one\ntwo\n",
     });
-    expect(writeResult).toMatchObject({
-      kind: "diff",
-      operation: "write",
-      path: "new-file.txt",
-      after: "one\ntwo\n",
+    expect(writePreparation).toMatchObject({
+      protocol: "mingxu/tool-mutation-v1",
+      binding: { operation: "write", baselineHash: "missing" },
+      summary: { path: "new-file.txt", afterBytes: 8 },
+      presentation: { kind: "diff" },
     });
-    expect((writeResult as { changes: string[] }).changes.join("\n")).toContain("+ one");
+    expect((writePreparation.presentation.payload as { changes: string[] }).changes.join("\n")).toContain("+ one");
+    await expect(readFile(join(workspaceRoot, "new-file.txt"), "utf8")).rejects.toThrow();
+    const writeResult = await writeTool.commit!(writePreparation);
+    expect(writeResult).toMatchObject({ kind: "diff", operation: "write", path: "new-file.txt", committed: true });
     await expect(readFile(join(workspaceRoot, "new-file.txt"), "utf8")).resolves.toBe("one\ntwo\n");
+    await expect(writeTool.execute({ path: "bypass.txt", content: "no" })).rejects.toThrow("prepare/commit");
 
-    const editResult = await tools.get("edit")!.execute({
+    const editTool = tools.get("edit")!;
+    const editPreparation = await editTool.prepare!({
       path: "existing.txt",
       content: "alpha\nbeta\ngamma\n",
     });
-    expect(editResult).toMatchObject({
-      kind: "diff",
-      operation: "edit",
-      path: "existing.txt",
-      before: "alpha\nbeta\n",
-      after: "alpha\nbeta\ngamma\n",
-    });
-    expect((editResult as { changes: string[] }).changes.join("\n")).toContain("+ gamma");
+    expect((editPreparation.presentation.payload as { changes: string[] }).changes.join("\n")).toContain("+ gamma");
+    await expect(readFile(join(workspaceRoot, "existing.txt"), "utf8")).resolves.toBe("alpha\nbeta\n");
+    const editResult = await editTool.commit!(editPreparation);
+    expect(editResult).toMatchObject({ kind: "diff", operation: "edit", path: "existing.txt", committed: true });
     await expect(readFile(join(workspaceRoot, "existing.txt"), "utf8")).resolves.toBe("alpha\nbeta\ngamma\n");
   });
 
@@ -211,18 +223,13 @@ describe("coding-tools extension lifecycle", () => {
     expect(installed.record.enabled).toBe(false);
     expect(await manager.list("user")).toHaveLength(1);
 
-    const loaderTools: string[] = [];
+    const registry = new ToolRegistry();
     const loader = new PluginLoader({
       registerTool(tool) {
-        loaderTools.push(tool.name);
+        registry.register(tool as Tool);
       },
       unregisterTool(name) {
-        const index = loaderTools.indexOf(name);
-        if (index >= 0) {
-          loaderTools.splice(index, 1);
-          return true;
-        }
-        return false;
+        return registry.unregister(name);
       },
     });
 
@@ -234,13 +241,19 @@ describe("coding-tools extension lifecycle", () => {
 
     const loaded = await manager.loadEnabledExtensions(loader, "user");
     expect(loaded).toEqual(["mingxu-coding-tools"]);
-    expect(loaderTools.sort()).toEqual(expectedToolNames);
+    expect(registry.list().map((tool) => tool.name).sort()).toEqual(expectedToolNames);
+
+    const sessionStore = new JsonlSessionStore(join(root, "sessions"));
+    const session = await sessionStore.createSession({ sessionId: "existing-session" });
+    await sessionStore.saveSession(session, session.revision);
 
     const doctor = await manager.doctor();
     expect(doctor).toContain("mingxu-coding-tools");
     expect(doctor).toContain("healthy");
 
     await manager.disable("mingxu-coding-tools", "user");
+    expect(registry.list()).toEqual([]);
+    expect(loader.list()).toEqual([]);
     const afterDisableLoaderTools: string[] = [];
     const afterDisableLoader = new PluginLoader({
       registerTool(tool) {
@@ -253,6 +266,10 @@ describe("coding-tools extension lifecycle", () => {
     expect(await manager.loadEnabledExtensions(afterDisableLoader, "user")).toEqual([]);
 
     await expect(manager.remove("mingxu-coding-tools", "user")).resolves.toBe(true);
+    expect(registry.list()).toEqual([]);
+    await expect(sessionStore.getRequiredSession("existing-session")).resolves.toMatchObject({
+      session: { sessionId: "existing-session" },
+    });
     expect(await manager.list("user")).toEqual([]);
     expect((await manager.inspectLock("user")).records).toEqual([]);
     await expect(readFile(join(userRoot, "extensions", "mingxu-coding-tools", "index.js"), "utf8")).rejects.toThrow();

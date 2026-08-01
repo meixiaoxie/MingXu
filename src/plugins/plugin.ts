@@ -18,10 +18,14 @@ import type {
   PluginModuleV1,
   PluginPermissions,
   PluginToolDefinition,
+  PluginToolExecutionContext,
+  PreparedToolMutation,
   PresentationBlock,
   PresentationBlockKind,
   PresentationBlockState,
   ToolGovernance,
+  ToolMutationBinding,
+  ToolMutationSummary,
 } from "@mingxu/plugin-sdk";
 
 export const PLUGIN_API_VERSION = "mingxu/plugin-v1" as const;
@@ -46,10 +50,14 @@ export type {
   PluginModuleV1,
   PluginPermissions,
   PluginToolDefinition,
+  PluginToolExecutionContext,
+  PreparedToolMutation,
   PresentationBlock,
   PresentationBlockKind,
   PresentationBlockState,
   ToolGovernance,
+  ToolMutationBinding,
+  ToolMutationSummary,
 };
 
 export type Plugin = PluginModuleV1;

@@ -13,6 +13,13 @@ export interface ApprovalRecord {
   reason?: string;
   expiresAt?: string;
   revokedAt?: string;
+  mutation?: {
+    readonly changeFingerprint: string;
+    readonly baselineHash: string;
+    readonly targetHash: string;
+    readonly normalizedPath: string;
+    readonly diffRef: string;
+  };
 }
 
 export interface ApprovalStore {

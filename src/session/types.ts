@@ -1,4 +1,5 @@
 import type { ApprovalRecord } from "../approval/types.js";
+import type { ToolMutationSummary } from "@mingxu/plugin-sdk";
 import type { Message, RunTerminationReason, ToolResult } from "../core/types.js";
 
 export interface SessionRecord {
@@ -19,6 +20,7 @@ export interface SessionToolInvocationRecord {
   startedAt: string;
   endedAt?: string;
   input: unknown;
+  mutationSummary?: ToolMutationSummary;
   output?: unknown;
   isError?: boolean;
 }

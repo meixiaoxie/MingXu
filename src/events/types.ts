@@ -80,6 +80,12 @@ export interface RuntimeEventMap {
   "approval.matched": Record<string, unknown>;
   "tool.execution_blocked": Record<string, unknown>;
   "tool.execution_allowed": Record<string, unknown>;
+  "tool.prepare.start": Record<string, unknown>;
+  "tool.prepare.end": Record<string, unknown>;
+  "tool.prepare.error": Record<string, unknown>;
+  "tool.commit.start": Record<string, unknown>;
+  "tool.commit.end": Record<string, unknown>;
+  "tool.commit.error": Record<string, unknown>;
   "tool.call.start": Record<string, unknown>;
   "tool.call.end": Record<string, unknown>;
   "tool.call.error": Record<string, unknown>;

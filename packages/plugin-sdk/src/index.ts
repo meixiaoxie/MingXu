@@ -27,8 +27,12 @@ export type {
   PluginModuleV1,
   PluginPermissions,
   PluginToolDefinition,
+  PluginToolExecutionContext,
+  PreparedToolMutation,
   PresentationBlock,
   PresentationBlockKind,
   PresentationBlockState,
   ToolGovernance,
+  ToolMutationBinding,
+  ToolMutationSummary,
 } from "./protocol.js";
