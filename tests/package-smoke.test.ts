@@ -17,15 +17,22 @@ interface CommandResult {
 }
 
 /** Runs a Node script directly, avoiding shell and PATH differences in CI. */
-function runNode(args: readonly string[], cwd = projectRoot): Promise<CommandResult> {
+function runNode(args: readonly string[], cwd = projectRoot, input?: string): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, args, {
       cwd,
       shell: false,
+      stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, NO_COLOR: "1", npm_config_cache: npmCacheDirectory },
     });
     let stdout = "";
     let stderr = "";
+
+    if (input !== undefined) {
+      child.stdin.end(input);
+    } else {
+      child.stdin.end();
+    }
 
     child.stdout.on("data", (chunk: Buffer) => {
       stdout += chunk.toString();
@@ -38,15 +45,22 @@ function runNode(args: readonly string[], cwd = projectRoot): Promise<CommandRes
   });
 }
 
-function runCommand(command: string, args: readonly string[], cwd = projectRoot): Promise<CommandResult> {
+function runCommand(command: string, args: readonly string[], cwd = projectRoot, input?: string): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd,
       shell: false,
+      stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, NO_COLOR: "1", npm_config_cache: npmCacheDirectory },
     });
     let stdout = "";
     let stderr = "";
+
+    if (input !== undefined) {
+      child.stdin.end(input);
+    } else {
+      child.stdin.end();
+    }
 
     child.stdout.on("data", (chunk: Buffer) => {
       stdout += chunk.toString();
@@ -123,12 +137,13 @@ function installedBinPath(): string {
     : join(installDirectory, "bin", "mingxu");
 }
 
-function runInstalledCli(args: readonly string[], cwd = installDirectory): Promise<CommandResult> {
+function runInstalledCli(args: readonly string[], cwd = installDirectory, input?: string): Promise<CommandResult> {
   const binPath = installedBinPath();
   return runCommand(
     process.platform === "win32" ? process.env.ComSpec ?? "cmd.exe" : binPath,
     process.platform === "win32" ? ["/d", "/s", "/c", binPath, ...args] : args,
     cwd,
+    input,
   );
 }
 
@@ -195,6 +210,7 @@ describe("packed CLI and public API smoke path", () => {
     expect(entryStats.isFile()).toBe(true);
     expect(installedPackage.bin).toMatchObject({ mingxu: "./dist/entry.js" });
     expect(installedPackage.files).toEqual(["dist"]);
+    expect(installedPackage.dependencies).toMatchObject({ marked: "^18.0.7" });
     expect(installedPackage.dependencies ?? {}).not.toHaveProperty("@mingxu/tui");
     expect(installedPackage.private).not.toBe(true);
 
@@ -295,27 +311,85 @@ describe("packed CLI and public API smoke path", () => {
     expect(runResult.exitCode, runResult.stderr).toBe(0);
     expect(runResult.stdout.trim()).toBe("final:Say hello");
 
+    const sessionsResult = await runInstalledCli(["sessions", "--config", configPath]);
+    expect(sessionsResult.exitCode, sessionsResult.stderr).toBe(0);
+    const sessionId = sessionsResult.stdout.trim().split(/\r?\n/u)[0]?.split("\t")[0];
+    expect(sessionId).toBeDefined();
+    if (!sessionId) {
+      throw new Error("Expected a recent session id from the packed CLI");
+    }
+
+    const auditPath = join(fixtureRoot, ".mingxu", "audit", "runtime.jsonl");
+    const resumeResult = await runInstalledCli(["--config", configPath, "resume", sessionId, "--prompt", "Continue work"]);
+    expect(resumeResult.exitCode, resumeResult.stderr).toBe(0);
+    expect(resumeResult.stdout.trim()).toBe("final:Say hello|Continue work");
+
+    const auditSource = await readFile(auditPath, "utf8");
+    expect(auditSource).toContain("run.start");
+    expect(auditSource).toContain("run.end");
+    expect(auditSource).toContain("model.request.start");
+
+    const continueFixtureRoot = join(installDirectory, "continue-e2e-fixture");
+    const continueConfigPath = join(continueFixtureRoot, "mingxu.config.json");
+    const continueProviderPath = join(continueFixtureRoot, "providers.mjs");
+    await mkdir(continueFixtureRoot, { recursive: true });
+    await writeFile(continueConfigPath, JSON.stringify(runConfig, null, 2), "utf8");
+    await writeFile(continueProviderPath, providerModuleSource, "utf8");
+
+    const continueSeedResult = await runInstalledCli(["--config", continueConfigPath, "Say hello"]);
+    expect(continueSeedResult.exitCode, continueSeedResult.stderr).toBe(0);
+    expect(continueSeedResult.stdout.trim()).toBe("final:Say hello");
+
+    const continueResult = await runInstalledCli(["--config", continueConfigPath, "--continue"], continueFixtureRoot, "Continue work\n");
+    expect(continueResult.exitCode, continueResult.stderr).toBe(0);
+    expect(continueResult.stdout.trim()).toBe("final:Say hello|Continue work");
+
+    const chatResult = await runInstalledCli(["--config", configPath, "chat"], fixtureRoot, "Direct chat prompt\n");
+    expect(chatResult.exitCode, chatResult.stderr).toBe(0);
+    expect(chatResult.stdout.trim()).toBe("final:Direct chat prompt");
+
     const doctorResult = await runInstalledCli(["doctor", "--config", configPath]);
     expect(doctorResult.exitCode, doctorResult.stdout).toBe(0);
     expect(doctorResult.stdout).toContain("PASS config");
     expect(doctorResult.stdout).toContain("PASS plugin");
 
-    const auditPath = join(fixtureRoot, ".mingxu", "audit", "runtime.jsonl");
-    const sessionFiles = await readdir(sessionDirectory);
-    expect(sessionFiles.length).toBeGreaterThan(0);
-    const sessionFilename = sessionFiles.find((name) => name.endsWith(".jsonl"));
-    expect(sessionFilename).toBeDefined();
-    const sessionId = sessionFilename!.slice(0, -".jsonl".length);
-    const resumeResult = await runInstalledCli(["--config", configPath, "resume", sessionId, "--prompt", "Continue work"]);
-    expect(resumeResult.exitCode, resumeResult.stderr).toBe(0);
-    expect(resumeResult.stdout.trim()).toBe("final:Say hello|Continue work");
+    const extensionRoot = join(fixtureRoot, "extensions", "smoke-extension");
+    const extensionTarget = join("extensions", "smoke-extension");
+    const skeletonResult = await runInstalledCli(["extensions", "init", extensionTarget, "smoke-extension"], fixtureRoot);
+    expect(skeletonResult.exitCode, skeletonResult.stderr).toBe(0);
+    expect(await readFile(join(extensionRoot, "mingxu.plugin.json"), "utf8")).toContain('"id": "smoke-extension"');
 
-    const sessionSource = await readFile(join(sessionDirectory, sessionFilename!), "utf8");
-    expect(sessionSource).toContain("Say hello");
-    expect(sessionSource).toContain("Continue work");
-    const auditSource = await readFile(auditPath, "utf8");
-    expect(auditSource).toContain("run.start");
-    expect(auditSource).toContain("run.end");
-    expect(auditSource).toContain("model.request.start");
-  });
+    const addResult = await runInstalledCli(["--config", configPath, "extensions", "add", extensionTarget, "--scope", "project", "--yes"], fixtureRoot);
+    expect(addResult.exitCode, addResult.stderr).toBe(0);
+    expect(addResult.stdout).toContain("Installed smoke-extension");
+
+    const listResult = await runInstalledCli(["--config", configPath, "extensions", "list", "--scope", "project"]);
+    expect(listResult.exitCode, listResult.stderr).toBe(0);
+    expect(listResult.stdout).toContain("smoke-extension");
+    expect(listResult.stdout).toContain("disabled");
+
+    const doctorExtensionsResult = await runInstalledCli(["--config", configPath, "extensions", "doctor", "--scope", "project"]);
+    expect(doctorExtensionsResult.exitCode, doctorExtensionsResult.stderr).toBe(0);
+    expect(doctorExtensionsResult.stdout).toContain("health: healthy");
+
+    const disableResult = await runInstalledCli(["--config", configPath, "extensions", "disable", "smoke-extension", "--scope", "project"]);
+    expect(disableResult.exitCode, disableResult.stderr).toBe(0);
+    expect(disableResult.stdout).toContain("disabled smoke-extension");
+
+    const enableResult = await runInstalledCli(["--config", configPath, "extensions", "enable", "smoke-extension", "--scope", "project"]);
+    expect(enableResult.exitCode, enableResult.stderr).toBe(0);
+    expect(enableResult.stdout).toContain("enabled smoke-extension");
+
+    const disableAgainResult = await runInstalledCli(["--config", configPath, "extensions", "disable", "smoke-extension", "--scope", "project"]);
+    expect(disableAgainResult.exitCode, disableAgainResult.stderr).toBe(0);
+    expect(disableAgainResult.stdout).toContain("disabled smoke-extension");
+
+    const removeResult = await runInstalledCli(["--config", configPath, "extensions", "remove", "smoke-extension", "--scope", "project"]);
+    expect(removeResult.exitCode, removeResult.stderr).toBe(0);
+    expect(removeResult.stdout).toContain("removed smoke-extension");
+
+    const emptyListResult = await runInstalledCli(["--config", configPath, "extensions", "list", "--scope", "project"]);
+    expect(emptyListResult.exitCode, emptyListResult.stderr).toBe(0);
+    expect(emptyListResult.stdout).toContain("No extensions are installed.");
+  }, 300_000);
 });

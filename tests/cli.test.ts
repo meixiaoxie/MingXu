@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { main } from "../src/cli/main.js";
 import { MINGXU_IDENTITY_PROMPT } from "../src/cli/identity.js";
+import { parseArgs } from "../src/cli/parse-args.js";
 import { JsonlSessionStore } from "../src/session/jsonl-session-store.js";
 import type { ProcessTerminal } from "@mingxu/tui";
 
@@ -154,6 +155,19 @@ describe("mingxu CLI", () => {
     stdout.write.mockClear();
     await expect(main(["--version"], { stdout, stderr, version: "0.1.0" })).resolves.toBe(0);
     expect(stdout.write).toHaveBeenCalledWith("0.1.0\n");
+  });
+
+  it("parses extensions init as an extensions subcommand", () => {
+    expect(parseArgs(["extensions", "init", "extensions/smoke-extension", "smoke-extension"])).toMatchObject({
+      command: "extensions",
+      commandTarget: "init",
+      commandArgs: ["extensions/smoke-extension", "smoke-extension"],
+    });
+    expect(parseArgs(["extensions", "doctor", "--scope", "project"])).toMatchObject({
+      command: "extensions",
+      commandTarget: "doctor",
+      scope: "project",
+    });
   });
 
   it("loads named models and forwards the resolved config to a custom runner", async () => {

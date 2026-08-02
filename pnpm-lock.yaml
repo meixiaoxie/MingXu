@@ -48,6 +48,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.30.0
         version: 1.30.0(zod@3.25.76)
+      marked:
+        specifier: ^18.0.7
+        version: 18.0.7
       string-width:
         specifier: ^8.2.2
         version: 8.2.2

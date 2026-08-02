@@ -60,9 +60,9 @@ export function parseArgs(argv: readonly string[]): CliArguments {
       }
     } else if (argument === "sessions") {
       command = "sessions";
-    } else if (argument === "init") {
+    } else if (argument === "init" && command !== "extensions") {
       command = "init";
-    } else if (argument === "doctor") {
+    } else if (argument === "doctor" && command !== "extensions") {
       command = "doctor";
     } else if (argument === "chat") {
       command = "chat";

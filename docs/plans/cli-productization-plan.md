@@ -28,7 +28,7 @@
 | R4 产品组件与复杂面板 | P1 | 完成 Markdown、Diff、CommandBlock 和面板交互 | R1、R3 | 已完成（2026-07-31） |
 | R5 CLI 职责拆分与 Session replay | P0 | 完成运行适配、命令、屏幕和回放边界 | 稳定事件投影 | 已完成（2026-07-31） |
 | R6 coding-tools 两阶段写入 | P0 | 写入前预览，审批后原子提交 | R4、R5 | 已完成（2026-08-01） |
-| R7 发布级压力与跨平台验收 | P0 | 用真实产物和三平台结果关闭发布门槛 | R1-R6 | 待完成 |
+| R7 发布级压力与跨平台验收 | P0 | 用真实产物和三平台结果关闭发布门槛 | R1-R6 | 进行中（自动化证据已补齐，实机记录待补） |
 
 ## 4. R1：终端渲染与真实 scrollback
 
@@ -319,6 +319,16 @@ R6 已于 2026-08-01 完成，发布级压力与跨平台验收仍按 R7 独立�
 - CHANGELOG 记录 CLI 行为、插件协议和安装门槛变化。
 - SECURITY 描述两阶段写入、插件宿主进程边界和控制字符防护。
 - development roadmap 与本计划保持同一状态，不提前宣称成品完成。
+
+### 完成状态
+
+R7 的自动化发布证据已补齐，但还不能关闭整个成品 CLI 计划：
+
+- Windows、Linux、macOS 的 CI 矩阵，`pnpm typecheck`、`pnpm test`、`pnpm build`、`pnpm test:smoke`、`pnpm pack:dry-run` 和 `pnpm audit --prod` 已通过。
+- 真实 tarball 安装覆盖了 `--help`、`--version`、`init`、`chat`、`resume`、`--continue`、`doctor` 和扩展生命周期，且 `@mingxu/cli` 现在直接声明 `marked` 作为运行时依赖，避免安装后缺包。
+- `extensions init` / `extensions doctor` 的 subcommand 解析已修正，不会再退回到顶层 `init` / `doctor`。
+- 仍待补齐的缺口是 Windows Terminal、PowerShell、cmd 和至少一个 Unix terminal 的真实实机记录，以及 `C:\Windows\System32` 启动、IME、resize、scrollback、信号恢复和安装路径的人工抽查证据。
+- README、CHANGELOG、SECURITY 和 development roadmap 的文档收口仍保留为未完成，`## 14. 成品 CLI 完成定义` 也保持未勾选。
 
 ## 11. 执行顺序
 
