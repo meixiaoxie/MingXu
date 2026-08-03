@@ -203,5 +203,4 @@ pnpm audit --prod
 
 如果你想快速看阶段状态，建议一起看：
 
-- [docs/plans/development-roadmap.md](docs/plans/development-roadmap.md)
 - [CHANGELOG.md](CHANGELOG.md)
